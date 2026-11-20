@@ -883,3 +883,17 @@ Authorized after the user's final confirmation, against upload revision `c1293ca
 - **BUG-024 resolved in source:** compact Import pill/short labels/wrapping and removed duplicate padding; retain the existing scrollable mobile Modal. Completed import polling stops. Real narrow-screen/keyboard/focus acceptance remains pending.
 
 Verification: 138 tests, zero failed/skipped; server/web TypeScript, production web/PWA build and server bundle pass. See TEST-RESULTS.md for exact environment, lockfile checks and unperformed device/runtime acceptance. No production deployment or new SQLite schema/endpoint is included.
+
+
+## BUG-025 — Hermes audit: server look-ahead permanently stalls after a BudgetFull eviction cycle (found 2026-11-20, Hermes code audit of main @ 2706b94)
+
+**Where:** `server/src/audioCache.ts`, look-ahead update path.
+
+**Root cause:** when a look-ahead update hits `BudgetFull`, the window entry is marked `blocked = true` but `retryAt` is left at `Infinity`. The same-signature early-return check (`Date.now() < previous.retryAt`) then returns for that client/window forever, because the `blocked` branch also passes the guard (`previous.budget === config.cacheMaxBytes`). Even after playback frees disk space and the budget would allow look-ahead again, the entry never retries — it only recovers if the queue signature changes (track added/removed). Effect: after one eviction cycle under memory/disk pressure, a client stops pre-caching upcoming audio until the user edits the queue; users see cold-start fetches for every following track with no visible error.
+
+**For the next Codex revision:**
+- When marking an entry `blocked` on `BudgetFull`, set `retryAt = Date.now() + 30_000` (same backoff used for other transient errors) so the early-return window expires and the look-ahead re-checks the budget.
+- Add a regression test: fill the budget, trigger a blocked look-ahead, evict enough (or shrink the budget) so `BudgetFull` would pass, advance the clock past the backoff, and assert the next update attempt is not short-circuited.
+- While there: audit the related guard branch (`!previous.blocked || previous.budget === config.cacheMaxBytes`) for the same Infinity-retry pattern on any other error class.
+
+**Hermes audit notes (no action needed, for context):** verified during this audit and left as-is — lease release in `cacheBudget.ts` is idempotent (safe under the double `close`/`finish` release in `app.ts`); `range.ts` byte-range parsing is BigInt-safe; the web `probe=1` error path reuses the stream URL's `trace` param so failure-record lookups match; no compression middleware exists on any audio route and origin keep-alive is on (`Connection: keep-alive`, `Keep-Alive: timeout=72` verified live 2026-11-20), so no transport changes are required for this entry.
