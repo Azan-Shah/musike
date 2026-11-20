@@ -208,9 +208,9 @@ export class AudioCache {
       for (const id of ids) {
         try { await this.ensure(id, entry.controller.signal); }
         catch (e) {
-          if (e instanceof BudgetFull) { entry.blocked = true; playbackStage("prepare.blocked", { videoId: id, reason: "budget" }); this.debug("Look-ahead stopped at cache budget"); break; }
           if (entry.controller.signal.aborted) break;
           entry.retryAt = Date.now() + 30_000;
+          if (e instanceof BudgetFull) { entry.blocked = true; playbackStage("prepare.blocked", { videoId: id, reason: "budget" }); this.debug("Look-ahead stopped at cache budget"); break; }
           this.debug("Look-ahead item could not be cached");
         }
       }

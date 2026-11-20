@@ -1,3 +1,29 @@
+# Current verification — all-issues review and playback repair, 20 November 2026
+
+Baseline: user upload `musike-main (7).zip`, SHA-256 `625ca84bc7115064a867eac89da4d59a76d47bcb92077a2abcc54dcbff8e4d96`. Node v24.22.3, repository-pinned pnpm 10.14.0 through Corepack; production Docker remains Node 22.
+
+| Check | Actual result |
+| --- | --- |
+| Original application suite | PASS — 138/138 using its exact Node/tsx test command, with shared integrity-pinned installed dependencies and the wrapper executable bit restored |
+| Regression reproductions before application edits | Five targeted new fixtures fail on the original application: budget retry, jam repeat timeline, stale pause, offline hydration and native repeat; the remaining 25 tests in those files pass |
+| Final `pnpm test` | PASS — 149 tests, zero failed/skipped/cancelled; eleven added tests plus extended download/coordinator assertions |
+| `pnpm typecheck` | PASS — server and web |
+| `pnpm build` | PASS — production web/PWA; see build output for current asset sizes |
+| `pnpm --filter @musike/server bundle` | PASS |
+| `pnpm install --frozen-lockfile` | PASS — pnpm 10.14.0, exact original lockfile; esbuild postinstall succeeds |
+| Headless Chromium | Launch attempted; blocked by environment `socket() failed: Operation not permitted`, with ptrace also prohibited. No rendered/Android acceptance claimed |
+| Wrapper | Original bytes preserved; uploaded ZIP lacked executable mode, restored to 0755; all five subprocess fixtures pass |
+| Dependencies/CSS/architecture contracts | Manifests, lockfile, styles, endpoints, DOM hooks, SQLite/browser schemas, ARCHITECTURE.md and operator configuration unchanged |
+| Samsung A07/A15, providers/tunnel, revised Discord SDK, real offline quota and Docker runtime | NOT VERIFIED — operator acceptance remains pending |
+
+The initial broad regression run exposed incomplete new test mocks and missing archive executable permissions; the mocks were corrected and permissions restored before recording the five genuine before-fix reproductions. Baseline execution through pnpm was rejected because its reused node_modules directory was a symlink; the baseline then passed using the exact underlying Node/tsx command. These setup failures are not presented as application defects or successful checks.
+
+Media fixtures execute actual bundled player/coordinator/polling source with synthetic media and transport. IndexedDB tests use fake-indexeddb; React/SVG tests use jsdom. The server timeline/cache tests use the real worker and controlled clock/transport. They establish source regressions, not audible lock-screen reliability or physical OS survival. No deployment or live credentials were used.
+
+See ALL-BUGFIXES-HANDOFF.md for exact impact, per-item disposition, delivery/rollback and documentation-sync guidance. Source patch/tree/ZIP integrity is verified separately during packaging.
+
+---
+
 # Current verification — background/offline revision, 20 November 2026
 
 Uploaded baseline: `c1293caa1302c779b589289b6ba590c2d43f6caa`. Node v24.22.3, pnpm 10.14.0. Docker targets Node 22; no container/device acceptance is implied.

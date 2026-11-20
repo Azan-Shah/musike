@@ -95,6 +95,12 @@ test("browser sync coordinators preserve sole outputs across transfers and cross
     await until(() => first.store.getState().queue.length === 3 && third.store.getState().queue.length === 3);
     await assert.rejects(third.store.getState().toggle(), /host/);
     third.mod.alignJamPlayback({ ...third.store.getState(), position: 42 }); assert.equal(third.store.getState().position, 42);
+    third.store.setState({ repeat: "one", position: 179.8 });
+    third.mod.alignJamPlayback({ ...third.store.getState(), position: .2 });
+    assert.equal(third.store.getState().position, 179.8, "opposite sides of a repeat boundary are close, not 180 seconds apart");
+    third.store.setState({ status: "paused" });
+    third.mod.alignJamPlayback({ ...third.store.getState(), status: "playing", position: .2 });
+    assert.equal(third.store.getState().status, "playing", "polling restores a missed same-track resume");
     clock += 46000; const thirdId = third.mod.usePlaybackDevices.getState().view.deviceId; await sync.read("bob", "session-c", thirdId);
     const missing = await jams.current("bob"); assert.equal(missing!.host, null); assert.equal(missing!.snapshot.status, "paused");
     await until(() => third.store.getState().status === "paused");

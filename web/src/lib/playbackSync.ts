@@ -119,7 +119,8 @@ export function startPlaybackSync(store: Store) {
   const unsubscribe = store.subscribe((state, previous) => {
     if (applying || !allowed) return;
     if (state.queue.length > 500) { applying = true; store.setState(snapshot()); applying = false; dirty = true; void publish(); return; }
-    const changed = state.queue !== previous.queue || state.index !== previous.index || state.status !== previous.status || state.shuffle !== previous.shuffle || state.repeat !== previous.repeat || state.autoRadio !== previous.autoRadio;
+    const restarted = state.position + 1.2 < previous.position;
+    const changed = restarted || state.queue !== previous.queue || state.index !== previous.index || state.status !== previous.status || state.shuffle !== previous.shuffle || state.repeat !== previous.repeat || state.autoRadio !== previous.autoRadio;
     if (changed || state.position !== previous.position) dirty = true;
     if (changed && !publishing) { publishing = true; queueMicrotask(() => { publishing = false; if (dirty) { dirty = false; void publish(); } }); }
   });
@@ -127,13 +128,16 @@ export function startPlaybackSync(store: Store) {
     if (stopped || !allowed || view?.transfer || applying) return;
     const state = store.getState();
     // A full command already handles track changes. Polling corrects drift without repeatedly reloading audio.
-    if (state.queue[state.index]?.id !== target.queue[target.index]?.id) {
+    if (state.queue[state.index]?.id !== target.queue[target.index]?.id || target.status === "playing" && state.status === "paused") {
       applying = true; try { store.getState().resumeOutput(target); } finally { applying = false; } return;
     }
     if (target.status === "paused" && ["playing", "loading"].includes(state.status)) {
       applying = true; try { store.getState().suspendOutput(); store.setState({ ...target, status: "paused" }); } finally { applying = false; } return;
     }
-    if (target.status === "playing" && state.status === "playing" && Math.abs(state.position - target.position) > 1.2) {
+    const difference = Math.abs(state.position - target.position);
+    const drift = target.repeat === "one" && target.duration > 0
+      ? Math.min(difference % target.duration, target.duration - difference % target.duration) : difference;
+    if (target.status === "playing" && state.status === "playing" && drift > 1.2) {
       applying = true; try { originals.get("seek")?.(target.position); } finally { applying = false; }
     }
   };

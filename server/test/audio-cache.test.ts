@@ -55,6 +55,33 @@ test("audio shares budget with HD files, protects leases and stops without re-do
   } finally { releaseHd(); releaseWindow("test"); await cache.close(); Object.assign(config, previous); await rm(dir, { recursive: true, force: true }); }
 });
 
+test("a budget-blocked unchanged window retries after backoff when leased space is released", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "musike-budget-retry-"));
+  const previous = { cacheDir: config.cacheDir, cacheMaxBytes: config.cacheMaxBytes };
+  const realNow = Date.now; let clock = realNow(); Date.now = () => clock;
+  config.cacheDir = dir; config.cacheMaxBytes = 400;
+  const occupied = path.join(dir, `${id(9)}.720.mp4`);
+  await writeFile(occupied, "x".repeat(300)); const release = leaseFile(occupied);
+  let fetches = 0; let blocked = false;
+  const cache = new AudioCache(async () => [format], (async () => {
+    fetches++; return new Response("x".repeat(200), { headers: { "content-length": "200" } });
+  }) as typeof fetch, () => { blocked = true; });
+  try {
+    cache.update("retry-client", id(0), [id(1)], 1, 1);
+    for (let n = 0; n < 200 && !blocked; n++) await new Promise(r => setTimeout(r, 2));
+    assert.equal(blocked, true); const before = fetches;
+    release(); await rm(occupied);
+    cache.update("retry-client", id(0), [id(1)], 1, 2);
+    for (let n = 0; n < 8; n++) await pause();
+    assert.equal(fetches, before, "backoff must prevent repeated attempts");
+    clock += 30_001;
+    cache.update("retry-client", id(0), [id(1)], 1, 3);
+    for (let n = 0; n < 200 && !await cache.find(id(1)); n++) await new Promise(r => setTimeout(r, 2));
+    assert.ok(await cache.find(id(1)), "the unchanged queue must recover without a budget setting change");
+    assert.equal(fetches, before + 1);
+  } finally { release(); await cache.close(); Date.now = realNow; Object.assign(config, previous); await rm(dir, { recursive: true, force: true }); }
+});
+
 test("replacing a rapid-skip window aborts stale downloads and limits future IDs", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "musike-cancel-"));
   const previous = { cacheDir: config.cacheDir, cacheMaxBytes: config.cacheMaxBytes };

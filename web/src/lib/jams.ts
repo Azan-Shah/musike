@@ -12,6 +12,7 @@ let commands = Promise.resolve();
 function receive(view: JamView | null, transit = 0) {
   const previous = useJam.getState().view;
   if (previous && view?.id === previous.id && view.version < previous.version) return;
+  if (previous && view?.id === previous.id && view.version === previous.version && (view.serverNow < previous.serverNow || view.updatedAt < previous.updatedAt)) return;
   useJam.setState({ view, error: "" });
   if (!view) { setJamControl(null); return; }
   setJamControl((action, args) => {
@@ -37,7 +38,9 @@ function receive(view: JamView | null, transit = 0) {
   });
   const state = view.snapshot;
   const elapsed = state.status === "playing" ? Math.max(0, view.serverNow - view.updatedAt + transit) / 1000 : 0;
-  alignJamPlayback({ ...state, position: Math.min(state.duration || 604800, state.position + elapsed) });
+  const position = state.position + elapsed;
+  alignJamPlayback({ ...state, position: state.status === "playing" && state.repeat === "one" && state.duration > 0
+    ? position % state.duration : Math.min(state.duration || 604800, position) });
 }
 export async function jamAction(path: string, body?: unknown, method?: string) {
   const stamp = ++generation;

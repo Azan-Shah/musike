@@ -1,3 +1,17 @@
+# Current delivery — all-issues review and playback repair, 20 November 2026
+
+Use the complete `Musike_All_Bugfixes_20261120.zip` or apply `Musike_All_Bugfixes_20261120.patch` to the exact latest uploaded `musike-main (7).zip` baseline (SHA-256 `625ca84bc7115064a867eac89da4d59a76d47bcb92077a2abcc54dcbff8e4d96`). The patch and ZIP are alternative installation methods; do not apply historical patches in the repository again. Preserve operator-owned environment/compose files and runtime volumes. No migration, dependency upgrade, endpoint, proxy/tunnel or configuration change is needed.
+
+Build with the pinned pnpm 10.14.0: `pnpm install --frozen-lockfile`, `pnpm test`, `pnpm typecheck`, `pnpm build`, `pnpm --filter @musike/server bundle`. Tests pass on Node 24.22.3; production still targets Node 22 and requires its own image/runtime check. The source archive includes no node_modules, build output, runtime data or vendor SDK binaries.
+
+The uploaded ZIP omitted executable metadata. The delivered ZIP and Git patch restore mode 0755 on `deploy/ytdlp-wrap.sh` while preserving its exact content. If the extraction tool ignores Unix modes, restore that existing source file's executable bit through the normal operator workflow. No wrapper/environment/mount content change is part of this release.
+
+Refresh installed PWA clients onto the rebuilt assets and verify the new service worker. Do not clear all site data or remove owner downloads as an upgrade step. Native media loop handles repeat-one; jam timelines use modulo duration and same-song updates retain the playing source. Next complete audio preparation begins before server readiness, still limited to one next body/16 MiB/25 seconds/two attempts per 30-second retry window. Offline playback hydrates one downloaded next body early. Existing opt-in budgets, audio-only caching, output ownership and logout rules remain.
+
+Run the current ACCEPTANCE-CHECKLIST.md on demo, particularly A07 and A15 locked automatic/manual transitions, downloaded offline transitions and multi-account jam repeat-one. Headless Chromium launch is blocked by this execution environment; neither browser visual acceptance nor physical Android behavior has been certified. Keep the production image/source for rollback and roll back normally if device checks fail; storage schemas are unchanged. No production or live provider/Cloudflare/Discord changes were made here.
+
+---
+
 # Current delivery — background/offline source revision, 20 November 2026
 
 This header supersedes earlier release instructions. Base: upload `musike-main (6).zip`, commit `c1293caa1302c779b589289b6ba590c2d43f6caa`. Use the complete source ZIP or apply the new patch against this exact baseline. Do not reapply historical patches included as evidence. No production deployment was performed.

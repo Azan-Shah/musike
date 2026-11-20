@@ -36,6 +36,7 @@ test("download admission rejects partial, video, empty and HTML responses; video
     for (const [status, type, body] of [[206, "audio/mp4", "partial"], [200, "video/mp4", "video"], [200, "text/html", "challenge"], [200, "audio/mp4", ""]] as const) {
       await assert.rejects(f.mod.fetchCompleteAudio(track(1).id, new AbortController().signal, async () => new Response(body, { status, headers: { "content-type": type } })));
     }
+    await assert.rejects(f.mod.fetchCompleteAudio(track(1).id, new AbortController().signal, async () => new Response("short", { headers: { "content-type": "audio/mp4", "content-length": "20" } })));
     const body = await f.mod.fetchCompleteAudio(track(1).id, new AbortController().signal);
     assert.equal(await body.text(), "complete-audio"); assert.match(f.h.requests[0], /\/audio$/);
     assert.ok(!f.h.requests[0].includes("/video"));

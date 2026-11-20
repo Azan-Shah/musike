@@ -77,7 +77,7 @@ export interface PlayerState {
 }
 
 // Media elements live outside React so playback survives any re-render or route change.
-// On iOS this is the native player behind the same API (see lib/audio.ts).
+// The website and installed PWA share this browser audio element.
 const audio = createAudio();
 let resumeWanted = false;
 let lastFailure: FailureKind | undefined;
@@ -238,11 +238,12 @@ export const usePlayer = create<PlayerState>((set, get) => {
     });
     media.volume = s.volume;
     media.muted = s.muted;
+    media.loop = s.repeat === "one";
     const start = (src: string) => {
       media.src = src;
       if (autoplay) play(media);
     };
-    // The server's proxy URL is known right away; on Android the stream is first resolved on the phone.
+    // The same-origin proxy URL is synchronous; resolution stays on the server.
     if (activeBlob) { URL.revokeObjectURL(activeBlob); activeBlob = null; }
     if (complete && kind === "audio") {
       activeBlob = complete.url; start(complete.url);
@@ -313,16 +314,27 @@ export const usePlayer = create<PlayerState>((set, get) => {
   }
 
   function warmQueue() {
-    if (!playbackCanOutput() || useSession.getState().offline) return;
+    if (!playbackCanOutput()) return;
     const s = get();
+    const offline = !!useSession.getState().offline;
     if (radioJob && (radioJob.queue !== s.queue || !s.autoRadio || s.repeat !== "off")) { radioJob.controller.abort(); radioJob = null; }
     const current = s.queue[s.index];
     const upcoming = upcomingTracks(s.queue, s.index, 10, s.repeat);
-    completePreload.retain(!s.preferVideo && lookahead > 0 ? upcoming[0]?.id : undefined);
+    const nearest = (!s.preferVideo || offline) && (lookahead > 0 || offline) ? upcoming[0] : undefined;
+    completePreload.retain(nearest?.id);
     if (sessionLost || !current || (s.status !== "playing" && s.status !== "loading")) return;
     const queue = s.queue; const index = s.index;
-    const nearest = upcoming[0];
-    if (lookahead > 0 && nearest && !s.preferVideo) void completePreload.hydrate(nearest.id, crypto.randomUUID());
+    if (nearest) {
+      const trace = crypto.randomUUID();
+      if (offline) void completePreload.hydrate(nearest.id, trace);
+      else {
+        // Start while the current song is audible. Waiting for readyIds can miss
+        // the entire foreground window; the cold audio route already races sources.
+        const source = streamSource(nearest.id, "audio", s.quality, trace);
+        if (typeof source === "string") void completePreload.prepare(nearest.id, source, trace);
+      }
+    }
+    if (offline) return;
     const signature = `${current.id}:${upcoming.map((track) => track.id).join(",")}:${s.preferVideo}`;
     if (api.prefetch && warming === signature) return;
     if (api.prefetch) { warming = signature; void api.prefetch(current.id, upcoming.map((track) => track.id)).then((result) => {
@@ -363,6 +375,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
     if (s.repeat === "one") {
       const media = activeMedia();
       if (media) {
+        resumeWanted = true; pendingSeek = 0;
+        set({ position: 0, status: "loading", statusText: null });
         media.currentTime = 0;
         play(media);
       }
@@ -455,7 +469,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       syncPlaybackState();
     });
     media.addEventListener("pause", () => {
-      if (!isActive() || media.ended || get().status === "loading" || get().status === "error") return;
+      if (!isActive() || !media.paused || media.ended || get().status === "loading" || get().status === "error") return;
       resumeWanted = false; set({ status: "paused" });
       syncPlaybackState();
     });
@@ -698,8 +712,28 @@ export const usePlayer = create<PlayerState>((set, get) => {
       syncPlaybackState();
     },
     resumeOutput: (snapshot) => {
-      set({ ...snapshot, status: "paused", statusText: null, buffered: 0 });
-      if (snapshot.queue.length) load(snapshot.index, { startAt: snapshot.position, disablePreload: true, autoplay: snapshot.status === "playing" || snapshot.status === "loading" });
+      if (sessionLost || !playbackCanOutput()) return;
+      const track = snapshot.queue[snapshot.index];
+      const media = activeMedia();
+      const autoplay = snapshot.status === "playing" || snapshot.status === "loading";
+      resumeWanted = autoplay;
+      if (track && media && loaded?.id === track.id && loaded.kind === kindFor(track) &&
+        (loaded.kind === "audio" || loaded.quality === get().quality) && media.readyState > 0 && get().status !== "error") {
+        cancelRetry();
+        const difference = Math.abs(media.currentTime - snapshot.position);
+        const drift = snapshot.repeat === "one" && snapshot.duration > 0
+          ? Math.min(difference % snapshot.duration, snapshot.duration - difference % snapshot.duration) : difference;
+        if (drift > 1.2 || !autoplay) { pendingSeek = 0; media.currentTime = snapshot.position; }
+        set({ ...snapshot, position: media.currentTime, duration: Number.isFinite(media.duration) && media.duration > 0 ? media.duration : snapshot.duration,
+          status: autoplay ? media.paused || get().status === "loading" ? "loading" : "playing" : "paused", statusText: null });
+        media.loop = snapshot.repeat === "one";
+        if (autoplay && media.paused) play(media);
+        else if (!autoplay) media.pause();
+        setMetadata(track); syncPlaybackState(); return;
+      }
+      set({ ...snapshot, status: autoplay ? "loading" : "paused", statusText: null, buffered: 0 });
+      if (snapshot.queue.length) load(snapshot.index, { startAt: snapshot.position, autoplay });
+      else { get().suspendOutput(); set({ status: "idle" }); }
     },
     warmUpcoming: () => { warmRetries = 0; if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; } warmQueue(); },
     stopSession: () => {
@@ -735,6 +769,7 @@ function persist() {
 setInterval(persist, 4000);
 // Queue edits (including optimistic/manual additions) refresh look-ahead without waiting for another playing event.
 usePlayer.subscribe((state, previous) => {
+  if (state.repeat !== previous.repeat) audio.loop = videoEl.loop = state.repeat === "one";
   if (state.status !== previous.status || state.index !== previous.index) syncPlaybackState();
   if (state.queue !== previous.queue || state.index !== previous.index || state.autoRadio !== previous.autoRadio || state.repeat !== previous.repeat)
     queueMicrotask(() => usePlayer.getState().warmUpcoming());
@@ -822,6 +857,7 @@ if ("mediaSession" in navigator) {
   const restored = selectCurrent(usePlayer.getState());
   if (restored) setMetadata(restored);
 }
+audio.loop = videoEl.loop = usePlayer.getState().repeat === "one";
 
 /** The player's status line in the current language, or null when there is nothing to say. */
 export function useStatusText(): string | null {

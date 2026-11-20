@@ -82,6 +82,38 @@ test("jam invitation, guest controls, version fencing, host death and explicit r
     await f.jams.leave("bob", room.id); room = await f.jams.view("alice", room.id); assert.equal(room.host, null);
   } finally { await f.cleanup(); }
 });
+test("repeat-one jam output wraps across multiple cycles and host restarts publish immediately", async () => {
+  const f = await fixture(); try {
+    const device = await f.sync.register("alice", "a", "repeat-host", "Host");
+    await f.sync.act("alice", "a", device.deviceId, { type: "claim" });
+    let room = await f.jams.create("alice"); const invite = await f.jams.invite("alice", room.id); await f.jams.join("bob", invite.code);
+    room = await f.jams.command("alice", room.id, { version: room.version, action: "playList", args: [[track(1)], 0] });
+    for (let i = 0; i < 2; i++) room = await f.jams.command("alice", room.id, { version: room.version, action: "cycleRepeat", args: [] });
+    room = await f.jams.command("alice", room.id, { version: room.version, action: "seek", args: [179] });
+    for (let i = 0; i < 3; i++) {
+      f.advance(i ? 180_000 : 1500);
+      // Keep the host heartbeat current without modifying the canonical timeline.
+      await f.a.db.run("UPDATE jam_members SET seen=? WHERE room_id=? AND user_id=?", [f.a.now(), room.id, "alice"]);
+      await f.sync.read("alice", "a", device.deviceId);
+      await f.jams.output("bob", room.id);
+      const row = await f.a.db.get("SELECT json FROM playback_state WHERE user_id=?", ["bob"]);
+      const output = JSON.parse(row!.json).snapshot;
+      assert.equal(output.position, .5, "repeated output must start inside the new cycle, never at duration");
+    }
+    room = await f.jams.current("alice");
+    room = await f.jams.command("alice", room!.id, { version: room!.version, action: "seek", args: [80] });
+    const own = await f.sync.read("alice", "a", device.deviceId);
+    await f.sync.act("alice", "a", device.deviceId, { type: "snapshot", epoch: own.epoch, seq: 1, ack: own.command!.id, snapshot: room.snapshot });
+    const version = room.version;
+    await f.jams.observe("alice", { ...room.snapshot, position: 0 });
+    room = await f.jams.current("bob");
+    assert.ok(room!.version > version, "a real host restart cannot wait for the five-second checkpoint");
+    assert.equal(room!.snapshot.position, 0);
+    await f.jams.observe("bob", { ...room!.snapshot, position: 60 });
+    assert.equal((await f.jams.current("alice"))!.snapshot.position, 0, "guest drift cannot overwrite hosting");
+  } finally { await f.cleanup(); }
+});
+
 test("jam lock and membership capacity prevent unsolicited entry; only granted device receives audio commands", async () => {
   const f = await fixture(); try {
     const a = await f.sync.register("alice", "a", "alice-output", "A"); const b = await f.sync.register("alice", "b", "alice-mirror", "B");

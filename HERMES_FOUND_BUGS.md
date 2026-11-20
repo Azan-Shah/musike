@@ -897,3 +897,57 @@ Verification: 138 tests, zero failed/skipped; server/web TypeScript, production 
 - While there: audit the related guard branch (`!previous.blocked || previous.budget === config.cacheMaxBytes`) for the same Infinity-retry pattern on any other error class.
 
 **Hermes audit notes (no action needed, for context):** verified during this audit and left as-is — lease release in `cacheBudget.ts` is idempotent (safe under the double `close`/`finish` release in `app.ts`); `range.ts` byte-range parsing is BigInt-safe; the web `probe=1` error path reuses the stream URL's `trace` param so failure-record lookups match; no compression middleware exists on any audio route and origin keep-alive is on (`Connection: keep-alive`, `Keep-Alive: timeout=72` verified live 2026-11-20), so no transport changes are required for this entry.
+
+
+## 20 November 2026 — approved all-issues review and playback repair
+
+Baseline: latest user upload `musike-main (7).zip`, SHA-256 `625ca84bc7115064a867eac89da4d59a76d47bcb92077a2abcc54dcbff8e4d96`. The user approved implementation after the evaluated plan. Reports, historical status wording and the duplicated BUG-018 entry above remain unchanged. This section records the current follow-up; it does not certify production deployment or external/device acceptance.
+
+### BUG-025 — RESOLVED IN SOURCE
+
+`AudioCache.update()` now assigns the existing 30-second retry deadline before handling either budget exhaustion or another transient failure. An unchanged blocked queue retries after that deadline; a changed budget can still permit an earlier re-evaluation. Aborted work exits without scheduling a retry. Successful/in-progress unchanged windows retain coalescing, revision fencing, nearer-media protection and active leases. Regression fills the budget with leased media, verifies no immediate retry, releases space, advances the clock and proves the same queue completes without changing the configured budget. Existing cancellation/no-thrash regressions pass.
+
+### BUG-026 — Live jam repeat-one repeatedly seeks between the beginning and ending — RESOLVED IN SOURCE
+
+User report: repeat-one affects everyone in the jam. Personal Android background failure was reported separately; locked jam playback has not yet been tested by the user.
+
+Source defects: both server and browser projected a playing timeline by clamping to duration, even in repeat-one; client alignment used linear distance across the wrap; host observation did not recognize same-track timeline discontinuities; same-song jam commands always reloaded the source. These paths could keep correcting a restarted song toward the previous endpoint.
+
+Repairs: playing repeat-one timelines use modulo duration on the server (commands/join/output) and browser polls. Alignment compares circular distance around the wrap. Native media looping avoids an ended/play restart for ordinary repeat-one; its wrapped position is published promptly. Host seeks/restarts with material drift are published immediately, and pending-command checks are repeated under the jam lock. Older same-version progress responses cannot rewind newer responses. Same-song queue/repeat/progress updates reuse the active source and apply only necessary seek/play/pause changes. Polling can restore playing intent after a missed same-song command. Account ownership, host/guest permissions, version fencing and transfer acknowledgements remain intact.
+
+Evidence: actual server/worker fixtures cover multiple cycles, output selection and host restart publication; actual browser jam polling and coordinator modules cover modulo positions, stale progress, circular alignment and missed-command recovery; actual player code with synthetic media verifies native-loop flags, wrapped position and source-preserving updates. Audible physical multi-device acceptance remains pending.
+
+### BUG-007 / BUG-022 — source transition fixes updated; Samsung acceptance remains OPEN
+
+The user confirms personal playback fails on Samsung A07 and A15 over both Wi-Fi/mobile data and speakers/Bluetooth: notification disappears at transition and playback resumes immediately on unlock. Manual locked Next has not been checked, jam background playback has not been checked, and no new logs are available. This is observational evidence, not proof of OS termination, an autoplay rejection or a Cloudflare cause.
+
+The browser now starts downloading its one bounded next complete body while the current song plays, using the existing cold/warm audio route instead of waiting for `readyIds`. Persistent offline next-track hydration also runs while the current song plays, allowing a synchronous Blob handoff at the boundary. Two failed preload attempts are followed by a 30-second backoff, rather than permanently exhausting that queue target. Optional IndexedDB failure falls back to network preparation; hydration has generation fencing across clear/reselect. A queued pause event cannot mark a newly playing element paused when `media.paused` is false. Same-song sync updates no longer reset the audio source or transiently announce paused. Explicit pause, logout, output fencing and cancellation still win.
+
+The existing stable audio element, intent-aware Media Session and idempotent media actions remain. Network preload remains one next body, 16 MiB, 25-second deadline, two attempts per backoff window; offline bodies remain subject to the existing 64 MiB admission cap. No silent audio, native app, new endpoint, service-worker music scheduler, operator configuration or speculative tunnel change was added. `deploy/ytdlp-wrap.sh` remains a server metadata tool; its contents are unchanged. The latest ZIP had no executable metadata, so its executable permission is restored.
+
+A physical A07/A15 acceptance run is still required before calling the reported locked-screen incident resolved. Headless Chromium could not launch in this environment (`socket() failed: Operation not permitted`); synthetic media tests cannot substitute for Android notification/audio-focus behavior.
+
+### BUG-023 — complete-body admission tightened; existing offline features retained
+
+Both the transition preloader and persistent downloader reject bodies shorter than a positive declared Content-Length. Offline admission, owner isolation, pin protection, interrupted-download checkpoints, logout, same-installation eligibility and exclusive browser locks remain covered by the existing fixtures. No general API/video caching or storage-schema change was introduced. Real quota/eviction/PWA restart acceptance remains pending.
+
+### All documented items reviewed
+
+| Items | Current disposition after this revision |
+| --- | --- |
+| BUG-001 | Existing warm-byte and first-usable cold-fallback mitigations retained and tested; no claim to fix YouTube's upstream token behavior |
+| BUG-002 | Existing matching/progress/review/checkpoint fixes retained; actual failed import/provider rerun remains pending |
+| BUG-003 | User-accepted source fix retained; preparation and complete-body coverage extended by this revision |
+| BUG-004 / BUG-006 | Bounded recovery/diagnostics and browser transition repairs retained/extended; live incident/edge cause remains unverified |
+| BUG-005 | Wrapper contents retained, executable permission restored, all five subprocess fixtures pass; operator timing remains a live check |
+| BUG-007 / BUG-022 | Updated source transition fixes above; A07/A15 locked playback remains acceptance-pending |
+| BUG-008 | Web/PWA-only retirement retained; no native application restored; actual Docker runtime check remains pending |
+| BUG-009 / BUG-014 | Working Discord CA fix retained; OAuth/service fixtures pass; real revised SDK/profile deployment regression remains pending |
+| BUG-010 / BUG-011 / BUG-012 | Existing stdout/privacy, Malaysian identity and audit-prompt implementations retained; regressions pass |
+| BUG-013 / BUG-018 | Device/epoch/transfer/SSE/error and guest-control protections retained; coordinator/server regressions pass |
+| BUG-015 / BUG-016 / BUG-017 | Import/social/admin source implementations retained and tested; live provider/device/operator acceptance remains separate |
+| BUG-019 / BUG-020 / BUG-021 / BUG-024 | Existing UI removal, scrolling, data-only commands and import presentation retained; relevant regression fixtures pass |
+| BUG-023 | Implemented offline feature retained; complete-body admission and next hydration tightened; physical PWA/storage acceptance remains pending |
+| BUG-025 / BUG-026 | Resolved in source with targeted regression coverage; demo acceptance remains required |
+
+Validation: 149 tests pass, zero failed/skipped/cancelled; server/web typechecks, production web/PWA build and server bundle pass. Original application suite: 138/138 after restoring the archive-lost wrapper executable bit. Eleven new tests plus extended existing assertions cover the new repairs. Runtime dependencies, lockfile, CSS, server endpoints, DOM hooks, SQLite/browser schemas and operator configuration are unchanged. ARCHITECTURE.md is therefore unchanged under the user's documentation constraint. No deployment occurred.

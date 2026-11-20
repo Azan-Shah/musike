@@ -1,3 +1,15 @@
+# 20 November 2026 — approved all-issues review / BUG-025–026 and Android transitions
+
+- Fixed unchanged lookahead queues permanently blocked by BudgetFull; preserve bounded 30-second retries, revisions, active leases and no-thrash behavior.
+- Fixed repeat-one jam timeline projection/alignment, native repeat continuity, prompt host discontinuity publication and stale-progress rejection. Preserve same-song media sources during jam updates and recover missed same-song playing commands.
+- Start bounded next-body preparation before server readyIds; hydrate downloaded next audio while offline playback is still active. Retry exhausted transient preloads after backoff; fence stale hydration and tolerate optional storage failure.
+- Ignore queued pause events when the current element is actually playing. Retain one browser audio element, Media Session intent, explicit pause and account output fencing.
+- Reject truncated declared-length bodies in both preload and persistent audio downloads. Preserve audio-only/owner-scoped storage and existing schemas.
+- Retained every accepted historical fix; restored only the wrapper executable bit lost by the uploaded ZIP. Wrapper contents, dependencies, CSS, endpoints, DOM hooks, schemas and operator configuration remain unchanged.
+- Verification: original 138 tests and final 149 tests pass; typechecks, web/PWA and server bundles pass. A07/A15 physical locked playback, real providers/Discord/edge and Docker acceptance remain pending. No deployment performed.
+
+---
+
 # 20 November 2026 — approved BUG-021–024 / BUG-007 revision
 
 - Fixed React/SVG event serialization at control callbacks and the typed remote/jam command boundary; retained Hermes BUG-018–020 fixes.

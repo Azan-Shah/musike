@@ -13,7 +13,11 @@ export class Jams {
     if (++bucket.count > 240) throw fail(429, "Jam request limit reached");
   }
   constructor(readonly accounts: Accounts, private sync: PlaybackSync) {}
-  private position(state: PlaybackSnapshot, at: number) { return state.status === "playing" ? Math.min(state.duration || 604800, state.position + Math.max(0, this.accounts.now() - at) / 1000) : state.position; }
+  private position(state: PlaybackSnapshot, at: number) {
+    if (state.status !== "playing") return state.position;
+    const position = state.position + Math.max(0, this.accounts.now() - at) / 1000;
+    return state.repeat === "one" && state.duration > 0 ? position % state.duration : Math.min(state.duration || 604800, position);
+  }
   private async row(id: string) { const row = await this.accounts.db.get("SELECT * FROM jam_rooms WHERE id=?", [id]); if (!row) throw fail(404, "Jam room not found"); return row; }
   private async membership(user: string, id: string) { if (!await this.accounts.db.get("SELECT user_id FROM jam_members WHERE room_id=? AND user_id=?", [id, user])) throw fail(404, "Jam room not found"); }
   private async publish(id: string, state: PlaybackSnapshot, host?: string | null, exclude?: string) {
@@ -152,9 +156,16 @@ export class Jams {
     if (this.sync.hasPendingJam(user)) return;
     const member = await this.accounts.db.get("SELECT room_id FROM jam_members WHERE user_id=?", [user]); if (!member) return;
     await this.accounts.lock(`jam:${member.room_id}`, async () => {
+      if (this.sync.hasPendingJam(user)) return;
       const row = await this.accounts.db.get("SELECT * FROM jam_rooms WHERE id=? AND host_id=?", [member.room_id, user]); if (!row) return;
       const old = cleanSnapshot(JSON.parse(row.json));
-      const structural = old.index !== snapshot.index || old.queue.map(t => t.id).join() !== snapshot.queue.map(t => t.id).join() || (snapshot.status === "paused" && old.status === "playing") || (snapshot.status === "playing" && old.status !== "playing");
+      const difference = Math.abs(this.position(old, row.updated_at) - snapshot.position);
+      const drift = old.repeat === "one" && snapshot.repeat === "one" && old.duration > 0
+        ? Math.min(difference % old.duration, old.duration - difference % old.duration) : difference;
+      // A restart/seek can keep the same song and status. Publish real timeline
+      // discontinuities immediately; native repeat wraps are compared circularly.
+      const timelineChanged = snapshot.status === "playing" && old.status === "playing" && (drift > 1.2 || old.duration !== snapshot.duration);
+      const structural = timelineChanged || old.repeat !== snapshot.repeat || old.shuffle !== snapshot.shuffle || old.autoRadio !== snapshot.autoRadio || old.index !== snapshot.index || old.queue.map(t => t.id).join() !== snapshot.queue.map(t => t.id).join() || (snapshot.status === "paused" && old.status === "playing") || (snapshot.status === "playing" && old.status !== "playing");
       if (structural) await this.publish(row.id, snapshot, undefined, user);
       else if (this.accounts.now() - row.updated_at >= 5000) await this.accounts.db.run("UPDATE jam_rooms SET json=?,updated_at=? WHERE id=? AND host_id=?", [JSON.stringify({ ...snapshot, status: old.status }), this.accounts.now(), row.id, user]);
     });

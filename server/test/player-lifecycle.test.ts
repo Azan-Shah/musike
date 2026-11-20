@@ -8,10 +8,10 @@ import { pathToFileURL } from "node:url";
 
 const track = (n: number) => ({ id: String(n).padStart(11, "0"), title: `Fixture ${n}`, artist: "Fixture artist", duration: 180, thumb: "", art: "", kind: "song" });
 const tick = async () => { for (let n = 0; n < 8; n++) await new Promise((resolve) => setImmediate(resolve)); };
-async function harness() {
+async function harness(options: { offline?: boolean; delayedReady?: boolean } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), "musike-player-test-"));
   const root = path.resolve("../web/src");
-  const h: any = { elements: [], sources: [], prepares: [], notices: [], played: [], plays: 0, errors: { message: "fixture network", failure: "network" }, handlers: new Map() };
+  const h: any = { elements: [], sources: [], prepares: [], notices: [], played: [], plays: 0, errors: { message: "fixture network", failure: "network" }, handlers: new Map(), offline: !!options.offline, cached: new Map(), reads: [], requests: [] };
   class Media extends EventTarget {
     _src = ""; paused = true; ended = false; readyState = 4; currentTime = 0; duration = 180; error: unknown = null;
     volume = .9; muted = false; videoWidth = 1920; videoHeight = 1080; buffered = { length: 1, end: () => 180 };
@@ -30,6 +30,7 @@ async function harness() {
   const timers: any[] = []; const interval = globalThis.setInterval; const timeout = globalThis.setTimeout;
   const values: Record<string, unknown> = {
     __musikeHarness: h, window: globalThis, document, localStorage: storage(), sessionStorage: storage(),
+    fetch: async (source: string) => { h.requests.push(source); if (h.transport) return h.transport(source); throw new Error("Fixture network unavailable"); },
     navigator: { userAgent: "Chrome", platform: "Linux", maxTouchPoints: 0, mediaSession: { metadata: null, playbackState: "none", setPositionState() {}, setActionHandler: (name: string, callback: any) => h.handlers.set(name, callback) } },
     MediaMetadata: class { constructor(_data: unknown) {} }, location: { protocol: "https:", reload() {} },
     addEventListener: browser.addEventListener.bind(browser), removeEventListener: browser.removeEventListener.bind(browser), dispatchEvent: browser.dispatchEvent.bind(browser),
@@ -41,9 +42,11 @@ async function harness() {
   h.Media = Media;
   h.messages = { player: { playsNext: (name: string) => name, addedToQueue: (name: string) => name, startingRadio: (name: string) => name, cantPlay: (_title: string, message: string) => message, aTrack: "track" },
     features: { signInAgain: "Sign in again", downloadDiagnostics: "Diagnostics", networkFailure: "Network failure", networkTimeout: "Timed out", radioRetry: "Retry radio" }, common: { update: "Update", install: "Install" } };
-  h.api = { prepare: async () => ({}), prefetch: async (id: string, ids: string[]) => { h.prepares.push({ id, ids }); return { lookahead: 3, readyIds: ids }; },
+    h.api = { prepare: async () => ({}), prefetch: async (id: string, ids: string[]) => { h.prepares.push({ id, ids }); return { lookahead: 3, readyIds: options.delayedReady ? [] : ids }; },
     playbackSettings: async () => ({ lookahead: 3, videoQuality: "sd" }), radio: async () => [], videoFor: async () => null };
   const mocks = new Map([
+    ["stores/session.ts", `export const useSession={getState:()=>({offline:globalThis.__musikeHarness.offline})};export const accountRequest=async()=>{};`],
+    ["lib/offlineDownloads.ts", `const h=globalThis.__musikeHarness;export const offlineAudioBlob=async id=>{h.reads.push(id);return h.cached.get(id)??null;};export const offlineAudioUrl=async id=>{const b=await offlineAudioBlob(id);return b?URL.createObjectURL(b):null;};export const cacheRecentAudio=()=>{};export const retainPreloadedAudio=async()=>{};export const touchDownloadedAudio=async()=>{};export const rememberOutput=async()=>{};`],
     ["lib/api.ts", `const h=globalThis.__musikeHarness;export const api=h.api;export const capabilities={video:true,engineSettings:false,retryOnError:false};export const systemMedia=null;export const streamSource=(id,kind,q,trace)=>'/api/stream/'+id+'/'+kind+'?trace='+trace;export const explainStreamError=async()=>h.errors;export const saveFile=async()=>{};`],
     ["lib/audio.ts", `const h=globalThis.__musikeHarness;export const createAudio=()=>{const m=new h.Media();h.elements.push(m);return m;};export const createUpcomingAudio=createAudio;`],
     ["i18n/index.ts", `export const getT=()=>globalThis.__musikeHarness.messages;export const useT=getT;`],
@@ -79,6 +82,76 @@ test("playlist/album/import playList, manual edits, jumps, shuffle and repeat re
     p().cycleRepeat(); await f.tick(); assert.equal(f.h.prepares.at(-1).ids[0], p().queue[0].id);
     p().removeAt(0); await f.tick(); assert.equal(f.h.prepares.at(-1).id, p().queue[p().index].id);
     p().clearUpcoming(); await f.tick(); assert.equal(f.h.prepares.at(-1).ids[0], p().queue[0].id); // repeat-all still wraps
+  } finally { await f.cleanup(); }
+});
+
+test("a queued pause from the old source cannot cancel the next playing source", async () => {
+  const f = await harness(); const p = () => f.player.getState();
+  try {
+    p().setAutoRadio(false); p().playList([track(1), track(2)]); await f.tick();
+    const audio = f.h.elements[0]; audio.emit("ended"); await f.tick();
+    assert.equal(audio.paused, false); audio.dispatchEvent(new Event("pause"));
+    assert.equal(p().status, "playing"); assert.equal(navigator.mediaSession.playbackState, "playing");
+    p().toggle(); await f.tick(); assert.equal(p().status, "paused");
+  } finally { await f.cleanup(); }
+});
+
+test("offline upcoming audio is hydrated before a hidden transition without a boundary database read", async () => {
+  const f = await harness({ offline: true }); const p = () => f.player.getState();
+  try {
+    f.h.cached.set(track(1).id, new Blob(["first"], { type: "audio/mp4" }));
+    f.h.cached.set(track(2).id, new Blob(["second"], { type: "audio/mp4" }));
+    sessionStorage.setItem("musike:user", "fixture-owner");
+    p().setAutoRadio(false); p().playList([track(1), track(2)]); await f.tick();
+    assert.ok(f.h.reads.includes(track(2).id));
+    const before = f.h.reads.length; f.document.visibilityState = "hidden";
+    f.h.elements[0].emit("ended");
+    assert.ok(f.h.elements[0].src.startsWith("blob:"), "the handoff must be synchronous");
+    await f.tick(); assert.equal(p().index, 1); assert.equal(p().status, "playing");
+    assert.equal(f.h.reads.length, before); assert.equal(f.h.prepares.length, 0);
+  } finally { await f.cleanup(); }
+});
+
+test("repeat-one uses native looping and publishes the wrapped position without replacing the source", async () => {
+  const f = await harness(); const p = () => f.player.getState();
+  try {
+    p().setAutoRadio(false); p().playList([track(1)]); await f.tick(); p().cycleRepeat(); p().cycleRepeat();
+    const audio = f.h.elements[0]; assert.equal(audio.loop, true); const sources = f.h.sources.length;
+    audio.currentTime = 179; audio.emit("timeupdate"); audio.currentTime = .3; audio.emit("timeupdate");
+    assert.equal(p().position, .3); assert.equal(p().status, "playing"); assert.equal(f.h.sources.length, sources);
+    p().cycleRepeat(); assert.equal(audio.loop, false);
+  } finally { await f.cleanup(); }
+});
+
+test("the next complete body downloads before server readyIds and hands off while hidden", async () => {
+  const f = await harness({ delayedReady: true }); const p = () => f.player.getState();
+  try {
+    f.h.transport = async () => new Response("complete", { headers: { "content-type": "audio/mp4", "content-length": "8" } });
+    p().setAutoRadio(false); p().playList([track(1), track(2)]); await f.tick();
+    assert.ok(f.h.requests.some((url: string) => url.includes(track(2).id)), "download cannot wait for server warming");
+    const requests = f.h.requests.length; f.document.visibilityState = "hidden";
+    f.h.elements[0].emit("ended");
+    assert.ok(f.h.elements[0].src.startsWith("blob:")); await f.tick();
+    assert.equal(p().status, "playing"); assert.equal(f.h.requests.length, requests);
+  } finally { await f.cleanup(); }
+});
+
+test("same-song jam queue and repeat updates preserve the playing source and notification", async () => {
+  const f = await harness(); const p = () => f.player.getState();
+  try {
+    p().setAutoRadio(false); p().playList([track(1), track(2)]); await f.tick();
+    const audio = f.h.elements[0]; audio.currentTime = 40; audio.emit("timeupdate");
+    const sources = f.h.sources.length; const plays = f.h.plays;
+    p().resumeOutput({ ...p(), queue: [track(1), track(2), track(3)], position: 40.4, repeat: "one" });
+    await f.tick();
+    assert.equal(f.h.sources.length, sources); assert.equal(f.h.plays, plays);
+    assert.equal(audio.currentTime, 40); assert.equal(audio.loop, true);
+    assert.equal(p().queue.length, 3); assert.equal(navigator.mediaSession.playbackState, "playing");
+    p().resumeOutput({ ...p(), position: 0, status: "playing" });
+    assert.equal(audio.currentTime, 0); assert.equal(f.h.sources.length, sources);
+    p().resumeOutput({ ...p(), position: 12, status: "paused" }); await f.tick();
+    assert.equal(audio.paused, true); assert.equal(audio.currentTime, 12); assert.equal(p().status, "paused");
+    assert.equal(navigator.mediaSession.playbackState, "paused");
   } finally { await f.cleanup(); }
 });
 test("hidden ended and manual next retain the same authorised audio element and Media Session", async () => {

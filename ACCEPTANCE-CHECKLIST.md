@@ -1,3 +1,22 @@
+# Current acceptance — all-issues review and playback repair, 20 November 2026
+
+Baseline: `musike-main (7).zip`, SHA-256 `625ca84bc7115064a867eac89da4d59a76d47bcb92077a2abcc54dcbff8e4d96`. This section supersedes older source-result counts; earlier records remain historical evidence.
+
+- [x] Original 138 tests pass after restoring the ZIP-lost wrapper executable permission; final 149 tests pass, zero failed/skipped/cancelled.
+- [x] Unchanged budget-blocked window recovers after 30 seconds with released space, without changing queue/budget; no immediate retry thrash.
+- [x] Server and actual browser coordinators: repeat-one modulo across multiple cycles, circular drift, immediate host discontinuity publication, stale progress rejection, host/guest permissions and output fencing.
+- [x] Actual player with synthetic media: native repeat wraps, same-source jam updates, stale pause events, offline prehydration and complete next-body handoff before server readyIds.
+- [x] Preload retry backoff, unavailable optional storage, clear/reselect generation fencing and truncated-body rejection in preload and persistent downloads.
+- [x] Server/web typechecks, production web/PWA and server bundle; runtime manifests/lockfile/CSS/schema/endpoint/operator configuration unchanged.
+- [ ] Samsung A07 AND A15: ordinary playlist and radio, at least 30 minutes AND ten automatic locked transitions in each Wi-Fi/mobile-data test; verify audible playback and notification persistence. Include speakers and Bluetooth. Manual locked Next/Previous/Play/Pause must also be tested, because they were not previously checked.
+- [ ] Both phones: downloaded playlist in airplane mode, lock and cross multiple boundaries; unlock and verify queue/position. Repeat-one should keep playing without source replacement.
+- [ ] Two real jam accounts: repeat-one for at least three cycles, seek/previous/next, add queue items during playback, pause/resume, transfer and reconnect; no 0→1→0 oscillation or repeated end seeks. Locked jam playback has not yet been tested by the user.
+- [ ] Demo cache-budget pressure: release active streams/space and verify an unchanged queue resumes warming after backoff.
+- [ ] Retain the outstanding real failed-import/provider, Discord SDK/profile, PWA quota/eviction/reopen, tunnel correlation and Docker/runtime checks below. Automated fixtures do not close these external acceptance items.
+- [ ] Operator demo verification and approval before production promotion. No production deployment performed here.
+
+---
+
 # Current acceptance — background/offline source revision, 20 November 2026
 
 Base `c1293caa`. Checked items are fixtures/build checks, not deployment or physical-device claims.

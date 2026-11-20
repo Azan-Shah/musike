@@ -55,13 +55,14 @@ export async function fetchCompleteAudio(id: string, signal: AbortSignal, transp
   if (!/^[A-Za-z0-9_-]{11}$/.test(id)) throw new Error("audio");
   const response = await transport(`/api/stream/${id}/audio`, { credentials: "same-origin", redirect: "manual", signal: AbortSignal.any([signal, AbortSignal.timeout(90_000)]) });
   const type = response.headers.get("content-type") ?? "";
+  const length = Number(response.headers.get("content-length"));
   if (response.status === 401) window.dispatchEvent(new Event("musike:unauthorized"));
   if (response.status !== 200 || response.redirected || !type.startsWith("audio/") || !response.body || Number(response.headers.get("content-length")) > MAX_AUDIO) { await response.body?.cancel(); throw new Error("audio"); }
   const reader = response.body.getReader(); const chunks: Uint8Array<ArrayBuffer>[] = []; let bytes = 0;
   try {
     for (;;) { const { done, value } = await reader.read(); if (done) break; bytes += value.length; if (bytes > MAX_AUDIO) throw new Error("limit"); chunks.push(new Uint8Array(value)); }
   } finally { await reader.cancel().catch(() => {}); }
-  if (!bytes || signal.aborted) throw new Error("audio");
+  if (!bytes || length > 0 && bytes !== length || signal.aborted) throw new Error("audio");
   return new Blob(chunks, { type });
 }
 export async function offlineAudioBlob(id: string) {
