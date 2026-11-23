@@ -1,3 +1,4 @@
+import { useOffline } from "../stores/offline";
 import { OfflineStorage } from "../components/OfflineStorage";
 import { PlaylistImportDialog } from "../components/PlaylistImportDialog";
 import { socialState, type SocialState } from "../lib/social";
@@ -35,11 +36,17 @@ function Entry({ to, name, kind, tracks, sub }: { to: string; name: string; kind
   );
 }
 
-export default function Library() {
+export default function Library({ downloads = false }: { downloads?: boolean }) {
+  const offline = useSession(s => !!s.offline);
+  const entries = useOffline(s => s.summary?.entries);
+  const available = new Set(entries?.map(e => e.id));
+  const local = downloads || offline;
+  const target = (path: string) => downloads && !offline ? `${path}?downloads=1` : path;
+  const counts = (tracks: Track[]) => local ? t.offline.downloadedCount(tracks.filter(track => available.has(track.id)).length, tracks.length) : t.common.tracks(tracks.length);
   const user = useSession(s => s.user);
   const [importing, setImporting] = useState(false);
   const [shares, setShares] = useState<SocialState["shares"]>([]);
-  useEffect(() => { let stopped = false; setShares([]); if (user) void socialState().then(s => { if (!stopped) setShares(s.shares); }).catch(() => {}); return () => { stopped = true; }; }, [user?.id]);
+  useEffect(() => { let stopped = false; setShares([]); if (user && !offline && !downloads) void socialState().then(s => { if (!stopped) setShares(s.shares); }).catch(() => {}); return () => { stopped = true; }; }, [user?.id, offline, downloads]);
   const favorites = useLibrary((s) => s.favorites);
   const playlists = useLibrary((s) => s.playlists);
   const history = useLibrary((s) => s.history);
@@ -54,6 +61,7 @@ export default function Library() {
         title={t.nav.library}
         actions={
           <>
+          {!offline && !downloads && <>
           {user && <button type="button" className="button-secondary text-xs" onClick={() => setImporting(true)}>{t.offline.importShort}</button>}
           <button
             type="button"
@@ -63,22 +71,24 @@ export default function Library() {
             <PlusIcon size={18} weight="bold" /> <span className="hidden sm:inline">{t.nav.newPlaylist}</span>
             <span className="sm:hidden">{t.library.newShort}</span>
           </button>
+          </>}
           </>
         }
       />
 
-      {user && <section className="px-4 pt-3 md:px-6"><Link className="button-secondary" to={paths.offline}>{t.offline.open}</Link><OfflineStorage /></section>}
+      {user && <section className="px-4 pt-3 md:px-6">{!local && <Link className="button-secondary" to={paths.offline}>{t.offline.open}</Link>}<OfflineStorage /></section>}
       <ul className="grid grid-cols-1 gap-1 px-2 pt-2 md:grid-cols-3 md:gap-2 md:px-4 lg:grid-cols-4 2xl:grid-cols-6">
-        <Entry to={paths.favorites} name={t.nav.favorites} kind="favorites" tracks={favorites} sub={t.common.tracks(favorites.length)} />
-        <Entry to={paths.history} name={t.nav.recentlyPlayed} kind="history" tracks={history} sub={t.common.tracks(history.length)} />
+        {local && <Entry to={`${paths.offline}?view=tracks`} name={t.offline.allDownloaded} kind="history" tracks={entries?.map(entry => entry.track) ?? []} sub={t.common.tracks(entries?.length ?? 0)} />}
+        <Entry to={target(paths.favorites)} name={t.nav.favorites} kind="favorites" tracks={favorites} sub={counts(favorites)} />
+        <Entry to={target(paths.history)} name={t.nav.recentlyPlayed} kind="history" tracks={history} sub={counts(history)} />
         {playlists.map((p) => (
           <Entry
             key={p.id}
-            to={paths.playlist(p.id)}
+            to={target(paths.playlist(p.id))}
             name={p.name}
             kind="playlist"
             tracks={p.tracks}
-            sub={`${t.library.playlistSub(p.tracks.length)}${p.origin ? ` · ${p.origin.provider === "youtube" ? t.collaboration.youtubePlaylist : p.origin.kind === "album" ? t.features.albumOrigin : t.features.playlistOrigin}` : ""}`}
+            sub={`${local ? counts(p.tracks) : t.library.playlistSub(p.tracks.length)}${p.origin ? ` · ${p.origin.provider === "youtube" ? t.collaboration.youtubePlaylist : p.origin.kind === "album" ? t.features.albumOrigin : t.features.playlistOrigin}` : ""}`}
           />
         ))}
       </ul>

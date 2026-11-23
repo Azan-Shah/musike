@@ -1,9 +1,9 @@
-import type { Playlist, Track } from "./types";
+import type { Library, Playlist, Track } from "./types";
 
 export const BUDGETS = [512, 1024, 2048] as const;
 export const MIB = 1024 * 1024;
 export const MAX_AUDIO = 64 * MIB;
-export interface OfflineSettings { owner: string; enabled: boolean; budget: number; eligible: boolean; name: string; }
+export interface OfflineSettings { normalization?: "quiet" | "standard" | "loud"; owner: string; enabled: boolean; budget: number; eligible: boolean; name: string; }
 export interface AudioEntry { owner: string; id: string; track: Track; bytes: number; played: number; }
 export interface OfflinePin { owner: string; id: string; playlist: Playlist; pending: Playlist | null; error: string; }
 export interface OfflineSummary { settings: OfflineSettings; entries: AudioEntry[]; pins: OfflinePin[]; bytes: number; }
@@ -14,14 +14,16 @@ let opening: Promise<IDBDatabase> | undefined;
 function db() {
   return opening ??= new Promise<IDBDatabase>((resolve, reject) => {
     if (typeof indexedDB === "undefined") { reject(new Error("Offline storage unavailable")); return; }
-    const r = indexedDB.open("musike-offline", 1);
+    const r = indexedDB.open("musike-offline", 2);
     r.onupgradeneeded = () => {
       for (const name of ["audio", "blobs", "pins"]) {
+        if (r.result.objectStoreNames.contains(name)) continue;
         const s = r.result.createObjectStore(name, { keyPath: ["owner", "id"] });
         s.createIndex("owner", "owner");
         if (name === "audio") s.createIndex("recent", ["owner", "played"]);
       }
-      r.result.createObjectStore("settings", { keyPath: "owner" });
+      if (!r.result.objectStoreNames.contains("settings")) r.result.createObjectStore("settings", { keyPath: "owner" });
+      if (!r.result.objectStoreNames.contains("library")) r.result.createObjectStore("library", { keyPath: "owner" });
     };
     r.onsuccess = () => { r.result.onversionchange = () => { r.result.close(); opening = undefined; }; resolve(r.result); };
     r.onerror = () => { opening = undefined; reject(r.error); };
@@ -94,7 +96,7 @@ export async function removeOfflinePin(owner: string, id: string) {
 }
 /** Lowering a budget never removes pins. Unpinned recents are trimmed oldest first. */
 export async function trimOfflineAudio(owner: string, clearRecents = false) {
-  return transaction(["settings", "audio", "blobs", "pins"], "readwrite", async tx => {
+  return transaction(["settings", "audio", "blobs", "pins", "library"], "readwrite", async tx => {
     const [settings, entries, pins] = await Promise.all([request<OfflineSettings | undefined>(tx.objectStore("settings").get(owner)), rows<AudioEntry>(tx, "audio", owner), rows<OfflinePin>(tx, "pins", owner)]);
     const protectedIds = new Set(pins.flatMap(p => [...p.playlist.tracks, ...(p.pending?.tracks ?? [])].map(t => t.id)));
     let bytes = entries.reduce((n, e) => n + e.bytes, 0);
@@ -106,11 +108,23 @@ export async function trimOfflineAudio(owner: string, clearRecents = false) {
   });
 }
 export async function purgeOfflineOwner(owner: string) {
-  return transaction(["settings", "audio", "blobs", "pins"], "readwrite", async tx => {
+  return transaction(["settings", "audio", "blobs", "pins", "library"], "readwrite", async tx => {
     for (const name of ["audio", "blobs", "pins"]) {
       const keys = await request(tx.objectStore(name).index("owner").getAllKeys(IDBKeyRange.only(owner)));
       for (const key of keys) tx.objectStore(name).delete(key);
     }
-    tx.objectStore("settings").delete(owner);
+    tx.objectStore("settings").delete(owner); tx.objectStore("library").delete(owner);
   });
+}
+
+/** Private metadata snapshot only; it cannot authorize login or output. */
+export async function saveOfflineLibrary(owner: string, library: Library) {
+  if (new Blob([JSON.stringify(library)]).size > 8 * MIB) throw new Error("metadata_limit");
+  return transaction(["settings", "library"], "readwrite", async tx => {
+    const settings = await request<OfflineSettings | undefined>(tx.objectStore("settings").get(owner));
+    if (settings?.enabled) tx.objectStore("library").put({ owner, library });
+  });
+}
+export async function readOfflineLibrary(owner: string): Promise<Library | null> {
+  return transaction(["library"], "readonly", async tx => (await request<{ library: Library } | undefined>(tx.objectStore("library").get(owner)))?.library ?? null);
 }

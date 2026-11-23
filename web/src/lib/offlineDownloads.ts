@@ -1,14 +1,16 @@
+import { normalizationOf, type Normalization } from "./audioNormalizationCore";
 import { getT } from "../i18n";
 import { useOffline } from "../stores/offline";
 import { useSession } from "../stores/session";
-import type { Playlist, Track } from "./types";
-import { BUDGETS, MAX_AUDIO, MIB, offlineSettings, offlineSummary, purgeOfflineOwner, readOfflineAudio, removeOfflinePin, saveOfflineAudio, touchOfflineAudio, trimOfflineAudio, writeOfflinePin } from "./offlineStore";
+import type { Library, Playlist, Track } from "./types";
+import { BUDGETS, MAX_AUDIO, MIB, offlineSettings, offlineSummary, readOfflineLibrary, saveOfflineLibrary, purgeOfflineOwner, readOfflineAudio, removeOfflinePin, saveOfflineAudio, touchOfflineAudio, trimOfflineAudio, writeOfflinePin } from "./offlineStore";
 
 const OWNER = "musike:offline-owner";
 export const offlineOwner = () => { try { return sessionStorage.getItem("musike:user") || null; } catch { return null; } };
 let generation = 0;
 let controller: AbortController | null = null;
 let recent: Track | null = null;
+const requested = new Map<string, Track>();
 let pendingPin: Playlist | null = null;
 let running = false;
 const notify = (message = "changed") => { if (typeof BroadcastChannel !== "undefined") { const channel = new BroadcastChannel("musike-offline"); channel.postMessage(message); channel.close(); } };
@@ -22,15 +24,19 @@ export async function refreshOffline() {
   } catch { useOffline.setState({ error: getT().offline.storageUnavailable }); }
 }
 export function forgetOfflineAccount() { cancelOfflineDownloads(); localStorage.removeItem(OWNER); }
-export async function rememberOfflineAccount(id: string, name: string) {
-  try { await offlineSettings(id, { name }); localStorage.setItem(OWNER, id); } catch {}
+export async function rememberOfflineAccount(id: string, name: string, normalization?: Normalization) {
+  try {
+    if (offlineOwner() !== id) return;
+    await offlineSettings(id, { name, normalization: normalizationOf(normalization) });
+    if (offlineOwner() === id) localStorage.setItem(OWNER, id);
+  } catch {}
 }
 export async function cachedOfflineAccount() {
   try {
     const owner = localStorage.getItem(OWNER); if (!owner) return null;
     const { settings, entries } = await offlineSummary(owner);
     if (!settings.enabled && !entries.length) return null;
-    return { id: owner, name: settings.name, phone: "", role: "user" as const, status: "active" };
+    return { id: owner, normalization: normalizationOf(settings.normalization), name: settings.name, phone: "", role: "user" as const, status: "active" };
   } catch { return null; }
 }
 export async function rememberOutput(eligible: boolean, active?: string | null, deviceId?: string, transfer = false) {
@@ -49,7 +55,7 @@ export async function setOfflineBudget(mib: number, enabled: boolean) {
   if (enabled) await navigator.storage?.persist?.().catch(() => false);
   await trimOfflineAudio(owner); await refreshOffline(); notify();
 }
-export function cancelOfflineDownloads() { generation++; controller?.abort(); controller = null; recent = null; pendingPin = null; }
+export function cancelOfflineDownloads() { generation++; controller?.abort(); controller = null; recent = null; pendingPin = null; requested.clear(); }
 /** No range response, opaque response, HTML or video MIME can become a downloaded song. */
 export async function fetchCompleteAudio(id: string, signal: AbortSignal, transport: typeof fetch = fetch): Promise<Blob> {
   if (!/^[A-Za-z0-9_-]{11}$/.test(id)) throw new Error("audio");
@@ -73,13 +79,33 @@ export async function offlineAudioUrl(id: string) {
   const owner = offlineOwner(); if (!owner || typeof indexedDB === "undefined") return null;
   try { const blob = await readOfflineAudio(owner, id); return blob ? URL.createObjectURL(blob) : null; } catch { return null; }
 }
+/** Explicit click queues a bounded unpinned audio download; it never starts playback. */
+export async function downloadOfflineTrack(track: Track) {
+  const owner = offlineOwner(); if (!owner || useSession.getState().offline) throw new Error(getT().offline.onlineRequired);
+  const summary = await offlineSummary(owner);
+  if (!summary.settings.enabled) throw new Error(getT().offline.enableFirst);
+  if (requested.size >= 100) throw new Error(getT().offline.downloadQueueFull);
+  requested.set(track.id, track); void drain();
+}
+export async function snapshotOfflineLibrary(library: Library) {
+  const owner = offlineOwner(); if (!owner || typeof indexedDB === "undefined" || useSession.getState().offline) return;
+  try { await saveOfflineLibrary(owner, library); }
+  catch { if (offlineOwner() === owner) useOffline.setState({ error: getT().offline.metadataUnavailable }); }
+}
+export async function offlineLibrarySnapshot(): Promise<Library> {
+  const owner = offlineOwner(); if (!owner) return { favorites: [], history: [], playlists: [] };
+  const stored = await readOfflineLibrary(owner);
+  if (stored) return stored;
+  const summary = await offlineSummary(owner);
+  return { favorites: [], history: summary.entries.map(e => e.track), playlists: summary.pins.map(p => p.pending ?? p.playlist) };
+}
 export function cacheRecentAudio(track: Track) {
   const owner = offlineOwner(); if (!owner || useSession.getState().offline) return;
   recent = track; void drain();
 }
 export async function retainPreloadedAudio(track: Track, blob: Blob) {
   const owner = offlineOwner(); if (!owner || typeof indexedDB === "undefined") return;
-  try { await saveOfflineAudio(owner, track, blob); } catch {} // Playback must never wait for persistence.
+  try { if (await saveOfflineAudio(owner, track, blob)) { await refreshOffline(); notify(); } } catch {} // Playback never waits for persistence.
 }
 export async function touchDownloadedAudio(id: string) {
   const owner = offlineOwner(); if (!owner || typeof indexedDB === "undefined") return;
@@ -113,9 +139,11 @@ async function drain() {
   const owner = offlineOwner(); if (!owner || typeof indexedDB === "undefined") return;
   running = true; const stamp = generation; useOffline.setState({ busy: true, error: "" });
   try {
-    const summary = await offlineSummary(owner); if (!summary.settings.enabled) return;
+    const summary = await offlineSummary(owner); if (!summary.settings.enabled) { recent = null; pendingPin = null; requested.clear(); return; }
     const playlist = pendingPin; pendingPin = null;
-    const track = recent; recent = null;
+    const explicit = playlist ? undefined : requested.values().next().value as Track | undefined;
+    if (explicit) requested.delete(explicit.id);
+    const track = explicit ?? recent; if (!explicit) recent = null;
     const tracks = playlist?.tracks ?? (track ? [track] : []);
     for (const item of tracks) {
       if (stamp !== generation || owner !== offlineOwner()) return;
@@ -135,7 +163,7 @@ async function drain() {
     }
   } finally {
     running = false; controller = null; useOffline.setState({ busy: false }); await refreshOffline(); notify();
-    if (recent || pendingPin) void drain();
+    if (recent || pendingPin || requested.size) void drain();
   }
 }
 /** An interrupted pin remains checkpointed. Resumption is an explicit user action. */

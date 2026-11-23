@@ -1,7 +1,10 @@
 import { mediaMetadata, mediaPlaybackState, registerMediaActions } from "../lib/mediaSession";
 import { cacheRecentAudio, offlineAudioBlob, offlineAudioUrl, retainPreloadedAudio, touchDownloadedAudio } from "../lib/offlineDownloads";
 import { useSession } from "../stores/session";
-import { PlaybackPreload } from "../lib/playbackPreload";
+import { PlaybackWindow } from "../lib/playbackWindow";
+import { nextDownloaded } from "../lib/playbackFallback";
+import { AudioNormalization } from "../lib/audioNormalization";
+import { normalizationOf } from "../lib/audioNormalizationCore";
 import { create } from "zustand";
 import { getT, useT } from "../i18n";
 import { api, capabilities, explainStreamError, saveFile, streamSource, systemMedia, type ApiError, type ErrorCode } from "../lib/api";
@@ -13,7 +16,7 @@ import type { Track } from "../lib/types";
 import { playerWriter, type SavedPlayer as Saved } from "../lib/playerPersistence";
 import { upcomingTracks } from "../lib/playbackQueue";
 import { SessionCache } from "../lib/sessionCache";
-import { playbackCanOutput } from "../lib/playbackSync";
+import { playbackCanOutput, playbackInJam } from "../lib/playbackSync";
 import type { SharedPlayback } from "../lib/playbackSync";
 import { useLibrary } from "../stores/library";
 import { openSettings } from "../stores/system";
@@ -83,10 +86,13 @@ let resumeWanted = false;
 let lastFailure: FailureKind | undefined;
 let recoveryCount = 0;
 let unlockRecoveryUsed = false;
-const completePreload = new PlaybackPreload(fetch, 16 * 1024 * 1024, (id, blob) => {
+const completePreload = new PlaybackWindow(fetch, 16 * 1024 * 1024, (id, blob) => {
   const track = usePlayer.getState().queue.find(t => t.id === id);
   if (track) void retainPreloadedAudio(track, blob);
 }, offlineAudioBlob);
+const normalization = new AudioNormalization();
+let automaticTrack = false;
+let endedToken = -1;
 let activeBlob: string | null = null;
 let recoveryId = "";
 
@@ -173,13 +179,14 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
   function play(media: HTMLMediaElement, fallback?: () => void) {
     const mine = token;
+    void normalization.start(media);
     media.play().catch((err: DOMException) => {
       if (mine !== token || err.name === "AbortError") return; // src changed mid-start
       if (err.name === "NotAllowedError") { if (fallback) fallback(); else { resumeWanted = false; set({ status: "paused" }); } } // autoplay blocked
     });
   }
 
-  function load(index: number, opts: { autoplay?: boolean; startAt?: number; disablePreload?: boolean } = {}) {
+  function load(index: number, opts: { autoplay?: boolean; startAt?: number; disablePreload?: boolean; automatic?: boolean; body?: Blob } = {}) {
     if (sessionLost || !playbackCanOutput()) return;
     cancelRetry();
     manualRadio?.abort();
@@ -189,13 +196,14 @@ export const usePlayer = create<PlayerState>((set, get) => {
     if (recoveryId !== track.id) { recoveryId = track.id; recoveryCount = 0; unlockRecoveryUsed = false; }
     resumeWanted = opts.autoplay !== false;
     const offline = !!useSession.getState().offline;
+    automaticTrack = !!opts.automatic;
     const complete = !opts.disablePreload && (!s.preferVideo || offline) ? completePreload.take(track.id) : null;
-    completePreload.retain();
+    completePreload.retain(upcomingTracks(s.queue, index, Math.min(3, lookahead), s.repeat).map(t => t.id));
     const trace = complete?.trace;
     beginPlaybackTrace(trace); recordPlayback("player.load", { videoId: track.id });
 
     // Video mode on a song: find its music video first, then load whichever fits.
-    if (!offline && needsClipLookup(track, s.preferVideo)) {
+    if (!opts.body && !offline && needsClipLookup(track, s.preferVideo)) {
       const mine = ++token;
       set({
         index,
@@ -212,7 +220,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       return;
     }
 
-    const kind = kindFor(track);
+    const kind = opts.body ? "audio" : kindFor(track);
     const media = mediaFor(kind);
     const other = mediaFor(kind === "video" ? "audio" : "video");
     other.pause();
@@ -236,8 +244,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
       duration: track.duration,
       buffered: 0,
     });
-    media.volume = s.volume;
-    media.muted = s.muted;
+    normalization.setVolume(media, s.volume, s.muted);
+    normalization.reset(media);
     media.loop = s.repeat === "one";
     const start = (src: string) => {
       media.src = src;
@@ -245,6 +253,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
     };
     // The same-origin proxy URL is synchronous; resolution stays on the server.
     if (activeBlob) { URL.revokeObjectURL(activeBlob); activeBlob = null; }
+    if (opts.body && kind === "audio") {
+      activeBlob = URL.createObjectURL(opts.body); start(activeBlob);
+      recordPlayback("player.downloaded_fallback", { videoId: track.id }); setMetadata(track); return;
+    }
     if (complete && kind === "audio") {
       activeBlob = complete.url; start(complete.url);
       recordPlayback("player.complete_handoff", { videoId: track.id, traceId: complete.trace });
@@ -321,7 +333,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
     const current = s.queue[s.index];
     const upcoming = upcomingTracks(s.queue, s.index, 10, s.repeat);
     const nearest = (!s.preferVideo || offline) && (lookahead > 0 || offline) ? upcoming[0] : undefined;
-    completePreload.retain(nearest?.id);
+    const window = nearest ? upcoming.slice(0, offline ? 1 : Math.min(3, lookahead)) : [];
+    completePreload.retain(window.map(track => track.id));
     if (sessionLost || !current || (s.status !== "playing" && s.status !== "loading")) return;
     const queue = s.queue; const index = s.index;
     if (nearest) {
@@ -330,8 +343,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
       else {
         // Start while the current song is audible. Waiting for readyIds can miss
         // the entire foreground window; the cold audio route already races sources.
-        const source = streamSource(nearest.id, "audio", s.quality, trace);
-        if (typeof source === "string") void completePreload.prepare(nearest.id, source, trace);
+        for (const track of window) {
+          const source = streamSource(track.id, "audio", s.quality, trace);
+          if (typeof source === "string") completePreload.prepare(track.id, source, trace);
+        }
       }
     }
     if (offline) return;
@@ -369,7 +384,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
   }
 
   function onEnded() {
-    if (!playbackCanOutput()) return;
+    const media = activeMedia();
+    if (!media?.ended || endedToken === token || !resumeWanted) return;
+    recordPlayback("player.ended_observed", mediaFields(media));
+    if (!playbackCanOutput()) { recordPlayback("player.advance_blocked", { reason: "output" }); return; }
+    endedToken = token;
     recordPlayback("player.ended");
     const s = get();
     if (s.repeat === "one") {
@@ -382,8 +401,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
       }
       return;
     }
-    if (s.index < s.queue.length - 1) return load(s.index + 1);
-    if (s.repeat === "all" && s.queue.length) return load(0);
+    if (s.index < s.queue.length - 1) return load(s.index + 1, { automatic: true });
+    if (s.repeat === "all" && s.queue.length) return load(0, { automatic: true });
     if (s.autoRadio && !useSession.getState().offline) return void continueWithRadio();
     set({ status: "paused", position: 0 });
   }
@@ -412,8 +431,23 @@ export const usePlayer = create<PlayerState>((set, get) => {
   let retriedToken = -1;
   let probingToken = -1;
 
+  async function downloadedFallback(mine: number) {
+    const state = get(); const queue = state.queue;
+    const valid = () => mine === token && !sessionLost && resumeWanted && playbackCanOutput() && !playbackInJam() && get().queue === queue;
+    const result = await nextDownloaded(queue, state.index, state.repeat === "all", async id => {
+      const prepared = completePreload.take(id);
+      if (prepared) { URL.revokeObjectURL(prepared.url); return prepared.blob; }
+      return offlineAudioBlob(id);
+    }, valid);
+    if (!valid()) return;
+    if (result) { toast(getT().offline.skippingDownloaded); load(result.index, { automatic: true, body: result.blob }); }
+    else { resumeWanted = false; activeMedia()?.pause(); set({ status: "paused", statusText: { error: getT().offline.noNextDownloaded } }); }
+  }
   function onError(media: HTMLMediaElement, stalled = false) {
-    if (useSession.getState().offline) { resumeWanted = false; set({ status: "paused", statusText: { error: getT().offline.unavailable } }); return; }
+    if (useSession.getState().offline) {
+      if (automaticTrack && !playbackInJam()) { void downloadedFallback(token); return; }
+      resumeWanted = false; set({ status: "paused", statusText: { error: getT().offline.unavailable } }); return;
+    }
     const mine = token;
     if (probingToken === mine) return;
     const url = media.currentSrc || media.src;
@@ -425,7 +459,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       return;
     }
     probingToken = mine;
-    set({ status: "error" });
+    set({ status: "loading", statusText: null });
     explainStreamError(url, media.error?.code).then(({ message, code, failure }) => {
       if (mine !== token || sessionLost) return;
       // A successful probe describes the origin, not the stalled element. It must not turn a
@@ -437,9 +471,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
         recordPlayback("player.retry", { reason: kind, position: at });
         retryTimer = setTimeout(() => {
           retryTimer = null;
-          if (mine === token && !sessionLost && resumeWanted) load(index, { startAt: at, disablePreload: true });
+          if (mine === token && !sessionLost && resumeWanted) load(index, { startAt: at, disablePreload: true, automatic: automaticTrack });
         }, 500 * recoveryCount);
-      } else report(stalled && !failure && !code ? getT().features.networkTimeout : message, code, kind);
+      } else if (resumeWanted && automaticTrack && !playbackInJam() && recoverableFailure(kind) && !code) void downloadedFallback(mine);
+      else report(stalled && !failure && !code ? getT().features.networkTimeout : message, code, kind);
     }).catch(() => { if (mine === token) report(getT().features.networkFailure, undefined, "network"); });
   }
 
@@ -487,6 +522,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
     });
     media.addEventListener("seeked", () => isActive() && syncPositionState());
     media.addEventListener("ended", () => isActive() && onEnded());
+    // A resumed media task may expose ended before delivering its event.
+    media.addEventListener("timeupdate", () => { if (isActive() && media.ended) onEnded(); });
     media.addEventListener("error", () => isActive() && media.getAttribute("src") && onError(media));
   }
   wire(audio);
@@ -656,15 +693,14 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     setVolume: (v) => {
       const volume = Math.max(0, Math.min(1, v));
-      audio.volume = videoEl.volume = volume;
-      const muted = volume === 0 ? true : false;
-      audio.muted = videoEl.muted = muted;
+      const muted = volume === 0;
+      normalization.setVolume(audio, volume, muted); normalization.setVolume(videoEl, volume, muted);
       set({ volume, muted });
     },
 
     toggleMute: () => {
       const muted = !get().muted;
-      audio.muted = videoEl.muted = muted;
+      normalization.setVolume(audio, get().volume, muted); normalization.setVolume(videoEl, get().volume, muted);
       if (!muted && get().volume === 0) get().setVolume(0.6);
       else set({ muted });
     },
@@ -748,8 +784,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
   };
 });
 
-audio.volume = videoEl.volume = usePlayer.getState().volume;
-audio.muted = videoEl.muted = usePlayer.getState().muted;
+normalization.setVolume(audio, usePlayer.getState().volume, usePlayer.getState().muted);
+normalization.setVolume(videoEl, usePlayer.getState().volume, usePlayer.getState().muted);
+normalization.setMode(normalizationOf(useSession.getState().preferences?.normalization ?? (!useSession.getState().enabled ? localStorage.getItem("musike:normalization") : undefined)));
+useSession.subscribe?.((state) => normalization.setMode(normalizationOf(state.preferences?.normalization)));
 
 export const selectCurrent = (s: PlayerState): Track | null => s.queue[s.index] ?? null;
 
@@ -801,6 +839,8 @@ addEventListener("online", restorePlayback);
 addEventListener("pageshow", restorePlayback);
 setInterval(() => {
   const state = usePlayer.getState();
+  const media = loaded ? mediaFor(loaded.kind) : null;
+  if (media?.ended && resumeWanted && playbackCanOutput()) media.dispatchEvent(new Event("timeupdate"));
   if (state.status === "loading" && state.statusText !== "fetchingRadio" && state.statusText !== "findingClip" && loaded && Date.now() - loadingAt > 8000) onLoadingDeadline();
   void flushPlaybackEvents();
 }, 5000);

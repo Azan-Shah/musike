@@ -99,3 +99,22 @@ test("cancelled partial audio never commits and an explicit resume can finish th
     assert.equal((await offlineSummary(f.owner)).pins[0].pending, null);
   } finally { await f.cleanup(); }
 });
+
+test("an individual request queued during a playlist download is retained and stays unpinned", async () => {
+  const f = await harness(); let release!: () => void; let started = false;
+  try {
+    await f.mod.setOfflineBudget(512, true);
+    f.h.transport = async (url: string) => {
+      if (url.includes(track(1).id)) { started = true; await new Promise<void>(resolve => { release = resolve; }); }
+      return new Response("complete", { headers: { "content-type": "audio/mp4" } });
+    };
+    await f.mod.pinOfflinePlaylist({ id: "one", name: "Pinned", createdAt: 1, updatedAt: 1, tracks: [track(1)] });
+    for (let n = 0; n < 100 && !started; n++) await tick(); assert.equal(started, true);
+    await f.mod.downloadOfflineTrack(track(2)); release();
+    for (let n = 0; n < 300; n++) { await tick(); if ((await offlineSummary(f.owner)).entries.length === 2) break; }
+    await f.settled(); const summary = await offlineSummary(f.owner);
+    assert.equal(summary.entries.length, 2); assert.equal(summary.pins.length, 1);
+    assert.deepEqual(summary.pins[0].playlist.tracks.map(t => t.id), [track(1).id]);
+    assert.equal(f.h.requests.filter((url: string) => url.includes(track(2).id)).length, 1);
+  } finally { release?.(); await f.cleanup(); }
+});

@@ -1,46 +1,48 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router";
-import { Transport, Scrubber, Volume } from "../components/Controls";
-import { OfflinePlaylistButton, OfflineStorage } from "../components/OfflineStorage";
+import { ShortcutsDialog } from "../components/Dialogs";
+import { useShortcuts } from "../hooks/useShortcuts";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router";
+import { Rail } from "../components/Rail";
+import { MiniPlayer, TabBar } from "../components/MobileChrome";
+import { PlayerBar } from "../components/PlayerBar";
+import { NowPlayingSheet, PanelDrawer, SidePanel } from "../components/NowPlaying";
+import { SettingsDialog } from "../components/SettingsDialog";
+import { Toasts } from "../components/Toasts";
+import { MD, useMediaQuery } from "../hooks/useMediaQuery";
+import { useRouteScroll } from "../hooks/useRouteScroll";
 import { useT } from "../i18n";
-import { cancelOfflineDownloads, logoutOfflineData, offlineOwner, refreshOffline } from "../lib/offlineDownloads";
+import { cancelOfflineDownloads, logoutOfflineData, offlineOwner, refreshOffline, offlineLibrarySnapshot } from "../lib/offlineDownloads";
 import { offlineSummary } from "../lib/offlineStore";
 import { setOfflineOutput } from "../lib/playbackSync";
-import { paths } from "../lib/routes";
-import type { Track } from "../lib/types";
+import { NOW_PLAYING_HASH, paths } from "../lib/routes";
 import { usePlayer } from "../player/player";
-import { useOffline } from "../stores/offline";
+import { useLibrary } from "../stores/library";
+import { useUi } from "../stores/ui";
 import { accountRequest, useSession, type SessionInfo } from "../stores/session";
+import { TrackListSkeleton } from "../components/TrackList";
+const Library = lazy(() => import("./Library"));
+const Collection = lazy(() => import("./Collection"));
 
-export default function OfflineLibrary({ canPlay = true }: { canPlay?: boolean }) {
-  const t = useT(); const summary = useOffline(s => s.summary); const offline = useSession(s => !!s.offline);
-  const [page, setPage] = useState(0);
+export default function OfflineLibrary() {
+  const [params] = useSearchParams();
   useEffect(() => { void refreshOffline(); }, []);
-  const entries = summary?.entries ?? []; const ids = new Set(entries.map(e => e.id));
-  const play = (tracks: Track[], index = 0) => {
-    const p = usePlayer.getState(); p.setPreferVideo(false); p.setAutoRadio(false); p.playList(tracks, index);
-  };
-  return <div className="mx-auto max-w-3xl p-4 md:p-6">
-    <h1 className="text-2xl font-semibold">{t.offline.title}</h1>
-    {!offline && <Link className="text-accent-text" to={paths.library}>{t.nav.library}</Link>}
-    <OfflineStorage />
-    <ul className="flex flex-col gap-4">{summary?.pins.map(pin => {
-      const playlist = pin.pending ?? pin.playlist; const available = pin.playlist.tracks.filter(track => ids.has(track.id));
-      return <li className="rounded-2xl bg-surface-2 p-4" key={pin.id}><h2 className="mb-3 break-words font-semibold">{playlist.name}</h2>
-        <OfflinePlaylistButton playlist={playlist} />
-        <button type="button" className="button-secondary mt-3" disabled={!canPlay || !available.length} onClick={() => play(available)}>{t.common.play} · {available.length}</button>
-      </li>;
-    })}</ul>
-    <h2 className="py-4 font-semibold">{t.offline.recent}</h2>
-    {!entries.length && <p className="text-fg-2">{t.offline.empty}</p>}
-    <ul>{entries.slice(page * 60, page * 60 + 60).map(entry => <li key={entry.id}><button type="button" disabled={!canPlay} className="flex min-h-12 w-full flex-col rounded-xl p-3 text-left hover:bg-surface-2" onClick={() => play(entries.map(e => e.track), entries.indexOf(entry))}><span className="break-words">{entry.track.title}</span><span className="text-sm text-fg-2">{entry.track.artist}</span></button></li>)}</ul>
-    {entries.length > 60 && <div className="flex gap-2"><button type="button" className="button-secondary" disabled={!page} onClick={() => setPage(page - 1)}>{t.collaboration.previous}</button><button type="button" className="button-secondary" disabled={(page + 1) * 60 >= entries.length} onClick={() => setPage(page + 1)}>{t.collaboration.next}</button></div>}
-  </div>;
+  return params.get("view") === "tracks" ? <Collection kind="history" downloaded /> : <Library downloads />;
 }
 export function OfflineExperience() {
   const t = useT(); const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const [canPlay, setCanPlay] = useState(false);
-  const title = usePlayer(s => s.queue[s.index]?.title ?? "");
-  const note = usePlayer(s => typeof s.statusText === "object" ? s.statusText?.error : null);
+  useShortcuts();
+  const reconnectGeneration = useRef(0);
+  useEffect(() => () => { reconnectGeneration.current++; }, []);
+  const isMd = useMediaQuery(MD); const location = useLocation(); const navigate = useNavigate();
+  const hasTrack = usePlayer(s => s.queue.length > 0);
+  const panelOpen = useUi(s => s.panelOpen);
+  const main = useRef<HTMLElement>(null); useRouteScroll(main);
+  useEffect(() => {
+    let stopped = false; const owner = offlineOwner();
+    void refreshOffline();
+    void offlineLibrarySnapshot().then(library => { if (!stopped && owner === offlineOwner()) useLibrary.setState({ ...library, status: "ready" }); }).catch(() => { if (!stopped) setError(t.offline.storageUnavailable); });
+    return () => { stopped = true; };
+  }, []);
   useEffect(() => {
     let stopped = false; let unlock: (() => void) | undefined;
     cancelOfflineDownloads(); setOfflineOutput(false); usePlayer.getState().suspendOutput();
@@ -60,23 +62,45 @@ export function OfflineExperience() {
   }, []);
   const reconnect = async () => {
     if (busy) return;
-    const wasAllowed = canPlay;
+    const wasAllowed = canPlay; const stamp = ++reconnectGeneration.current; const owner = offlineOwner();
     setBusy(true); setOfflineOutput(false); usePlayer.getState().suspendOutput(); setCanPlay(false);
     try {
       const info = await accountRequest<SessionInfo>("/api/auth/me");
+      if (stamp !== reconnectGeneration.current || owner !== offlineOwner()) return;
       // Reload after authentication: module-level queue keys and the online output grant must be fresh.
       if (!info.enabled || info.user?.id !== offlineOwner()) sessionStorage.removeItem("musike:user");
-      location.reload();
-    } catch { setError(t.offline.onlineRequired); setBusy(false); setOfflineOutput(wasAllowed); setCanPlay(wasAllowed); }
+      window.location.reload();
+    } catch {
+      if (stamp !== reconnectGeneration.current || !useSession.getState().offline || owner !== offlineOwner()) return;
+      setError(t.offline.onlineRequired); setBusy(false); setOfflineOutput(wasAllowed); setCanPlay(wasAllowed);
+    }
   };
-  useEffect(() => { const online = () => void reconnect(); addEventListener("online", online); return () => removeEventListener("online", online); }, [busy]);
-  return <main className="scroll-area min-h-dvh overflow-y-auto bg-bg pb-10 text-fg">
-    <section className="mx-auto flex max-w-3xl flex-wrap items-center gap-3 p-4"><p className="font-semibold">{t.offline.mode}</p>
-      <button type="button" className="button-secondary" disabled={busy} onClick={() => void reconnect()}>{t.offline.reconnect}</button>
-      <button type="button" className="button-secondary" onClick={() => { localStorage.setItem("musike:logout-pending", "1"); setOfflineOutput(false); usePlayer.getState().stopSession(); void logoutOfflineData().then(() => location.reload()).catch(() => setError(t.offline.storageUnavailable)); }}>{t.features.logout}</button>
-      {error && <p role="alert" className="w-full text-sm text-danger">{error}</p>}
-    </section>
-    <OfflineLibrary canPlay={canPlay} />
-    {canPlay && <section className="mx-auto flex max-w-xl flex-col items-center gap-3 rounded-2xl bg-surface-2 p-4"><p className="max-w-full truncate">{title}</p>{note && <p role="alert" className="text-sm text-danger">{note}</p>}<Transport /><Scrubber className="w-full" /><Volume /></section>}
-  </main>;
+  useEffect(() => { const online = () => void reconnect(); addEventListener("online", online); return () => removeEventListener("online", online); }, [busy, canPlay]);
+  return <div className="grain flex h-dvh flex-col bg-bg md:gap-2 md:p-2">
+    <div className="flex min-h-0 flex-1 md:gap-2">
+      <Rail />
+      <main ref={main} className="scroll-area relative min-w-0 flex-1 overflow-y-auto pb-[calc(152px+env(safe-area-inset-bottom))] md:rounded-[20px] md:bg-surface-1 md:pb-0 md:ring-1 md:ring-line">
+        <section className="flex flex-wrap items-center gap-3 px-4 pt-4 md:px-6"><p className="text-sm font-semibold text-fg-2">{t.offline.mode}</p>
+          <button type="button" className="button-secondary" disabled={busy} onClick={() => void reconnect()}>{t.offline.reconnect}</button>
+          <button type="button" className="button-secondary" onClick={() => { localStorage.setItem("musike:logout-pending", "1"); setOfflineOutput(false); usePlayer.getState().stopSession(); void logoutOfflineData().then(() => locationReload()).catch(() => setError(t.offline.storageUnavailable)); }}>{t.features.logout}</button>
+          <button type="button" className="button-secondary md:hidden" onClick={() => useUi.getState().setSettingsOpen(true)}>{t.nav.settings}</button>
+          {error && <p role="alert" className="w-full text-sm text-danger">{error}</p>}
+        </section>
+        <Suspense fallback={<TrackListSkeleton />}><Routes>
+          <Route path={paths.library} element={<Library downloads />} />
+          <Route path={paths.offline} element={<OfflineLibrary />} />
+          <Route path={paths.favorites} element={<Collection kind="favorites" />} />
+          <Route path={paths.history} element={<Collection kind="history" />} />
+          <Route path="/playlist/:id" element={<Collection kind="playlist" />} />
+          <Route path="*" element={<Navigate to={paths.library} replace />} />
+        </Routes>
+        <span hidden data-route-ready /></Suspense>
+      </main>
+      {panelOpen && hasTrack && canPlay && <SidePanel />}
+    </div>
+    {canPlay && (isMd ? <PlayerBar /> : <><MiniPlayer /><TabBar /></>)}
+    {canPlay && <><PanelDrawer /><NowPlayingSheet open={!isMd && location.hash === `#${NOW_PLAYING_HASH}`} onClose={() => navigate({ hash: "" }, { replace: true })} /></>}
+    <ShortcutsDialog /><SettingsDialog /><Toasts />
+  </div>;
 }
+const locationReload = () => window.location.reload();

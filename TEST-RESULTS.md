@@ -1,3 +1,27 @@
+# Current verification — approved source revision, 23 November 2026
+
+Baseline: `musike-main (8).zip`, SHA-256 `9bb76ecbf6423562b10cbf6af15229ec14bf954d4536913c46749476f3ee0128`, plus the separately supplied updated `HERMES_FOUND_BUGS.md`. Node v24.22.3; repository-pinned pnpm 10.14.0 through Corepack. Production continues to target Node 22.
+
+| Check | Actual result |
+| --- | --- |
+| `corepack pnpm install --frozen-lockfile --offline` | PASS — 479 packages reused from the existing store; no lockfile or manifest changes |
+| `corepack pnpm test` | PASS — 165 tests; zero failed, skipped or cancelled. Baseline contained 149 tests; 16 meaningful additional tests cover the new behavior |
+| `corepack pnpm typecheck` | PASS — server and web |
+| `corepack pnpm build` | PASS — production web/PWA; fingerprinted normalization worklet included in service-worker precache; Library/Collection remain lazy route chunks |
+| `corepack pnpm --filter @musike/server bundle` | PASS |
+| `git diff --check` | PASS |
+| Source restrictions | Runtime manifests, lockfile, styles.css and wrapper bytes match the ZIP exactly; wrapper mode restored to executable. No operator configuration/native/vendor binary changes |
+| Physical/browser acceptance | NOT VERIFIED — headless Chromium launch was attempted and closed before opening a page. React/DOM fixtures are semantic tests, not rendered visual, decoded-audio or Android acceptance |
+| Live provider/origin/tunnel/Discord/Docker | NOT VERIFIED here — operator report is evidence of the historical origin 502s; no production access or deployment occurred |
+
+Tests execute actual server/worker persistence and API routes, browser stores/coordinators/React components with controlled transports/media, fake-indexeddb transaction semantics, the streaming normalization core on synthetic samples and a mock AudioContext/AudioWorklet graph. They do not demonstrate audible output, mobile signal coverage, uninterrupted OS background execution, Spotify-equivalent LUFS or browser quota/eviction behavior.
+
+The initial regression run exposed missing subscription methods in older test mocks when persistence was placed at a download-module boundary; preference persistence was moved to the real AuthGate lifecycle. The initial new endpoint fixture assumed unknown JSON properties would be rejected; Fastify instead strips them, so the security assertion now verifies that an injected owner cannot affect another account. New UI fixtures also needed complete i18n mocks. These harness/expectation corrections are not reported as application defects. The download queue/playlist collision and lifecycle/source changes have targeted fixtures.
+
+The supplied updated report is an unchanged prefix of the delivered HERMES_FOUND_BUGS.md; dated source acknowledgements follow it. Earlier counts/instructions below are historical and superseded by this section.
+
+---
+
 # Current verification — all-issues review and playback repair, 20 November 2026
 
 Baseline: user upload `musike-main (7).zip`, SHA-256 `625ca84bc7115064a867eac89da4d59a76d47bcb92077a2abcc54dcbff8e4d96`. Node v24.22.3, repository-pinned pnpm 10.14.0 through Corepack; production Docker remains Node 22.

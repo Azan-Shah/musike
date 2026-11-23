@@ -4,12 +4,21 @@ export interface PlaybackEvent { traceId: string; stage: string; at: number; vid
 const events: PlaybackEvent[] = [];
 let activeTrace = ""; let enabled = false;
 let sender: ((events: PlaybackEvent[]) => Promise<void>) | null = null;
+let successfulPrepareAt = -Infinity;
 let cursor = 0; let flushing = false; let lastFlush = 0;
 export const playbackTrace = () => activeTrace;
 export function beginPlaybackTrace(id?: string) {
   activeTrace = id ?? crypto.randomUUID(); return activeTrace;
 }
 export function recordPlayback(stage: string, fields: Partial<Omit<PlaybackEvent, "stage" | "at">> = {}) {
+  // Successful queue polls must not evict the track lifecycle from the bounded ring.
+  if (fields.operation === "queue.prepare") {
+    if (stage === "http.start") return;
+    if (stage === "http.response" && (fields.status ?? 200) < 400) {
+      if (Date.now() - successfulPrepareAt < 30_000) return;
+      successfulPrepareAt = Date.now();
+    }
+  }
   const event: PlaybackEvent = { traceId: fields.traceId || activeTrace || beginPlaybackTrace(), stage, at: Date.now() };
   if (fields.edgeRay && /^[0-9a-f]{16,32}-[A-Z]{3}$/i.test(fields.edgeRay)) event.edgeRay = fields.edgeRay;
   if (fields.videoId && /^[\w-]{11}$/.test(fields.videoId)) event.videoId = fields.videoId;

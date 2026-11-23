@@ -27,7 +27,14 @@ export async function registerAccounts(app: FastifyInstance, options: AccountOpt
     if (!publicPaths.has(pathname) && !req.musikeUser) throw fail(401, "Login required");
   });
   app.get("/api/auth/me", async (req) => ({ enabled, user: req.musikeUser, google: !!(accounts && process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && (process.env.GOOGLE_REDIRECT_URI || accounts.origin)),
-    admin: req.musikeUser?.role === "admin" }));
+    admin: req.musikeUser?.role === "admin", preferences: accounts && req.musikeUser ? await accounts.preferences(req.musikeUser.id) : undefined }));
+  app.patch("/api/account/preferences", { schema: { body: {
+    type: "object", required: ["normalization"], additionalProperties: false,
+    properties: { normalization: { type: "string", enum: ["quiet", "standard", "loud"] } },
+  } } }, async (req) => {
+    if (!accounts || !req.musikeUser) throw fail(401, "Login required");
+    return accounts.setPreferences(req.musikeUser.id, (req.body as { normalization: string }).normalization);
+  });
   app.post("/api/auth/request", { schema: { body: {
     type: "object", required: ["phone"], additionalProperties: false,
     properties: { phone: { type: "string", maxLength: 40 }, invite: { type: "string", maxLength: 100 }, remember: { type: "boolean" } },
@@ -59,7 +66,7 @@ export async function registerAccounts(app: FastifyInstance, options: AccountOpt
       { sql: "UPDATE users SET last_seen=? WHERE id=?", params: [accounts.now(), req.musikeUser.id] },
       { sql: "DELETE FROM clients WHERE last_activity<?", params: [accounts.now() - 60_000] },
     ]);
-    return { ok: true, user: req.musikeUser };
+    return { ok: true, user: req.musikeUser, preferences: await accounts.preferences(req.musikeUser.id) };
   });
   return accounts;
 }

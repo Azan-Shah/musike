@@ -86,6 +86,10 @@ CREATE INDEX invites_creator ON invites(created_by);
 CREATE INDEX invites_used_by ON invites(used_by);
 CREATE INDEX clients_user ON clients(user_id);
 INSERT INTO migrations(key,value) VALUES('social-import-admin-v1','1');`;
+const preferenceSchema = `
+CREATE TABLE account_preferences(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ normalization TEXT NOT NULL DEFAULT 'standard' CHECK(normalization IN ('quiet','standard','loud')), revision INTEGER NOT NULL DEFAULT 0);
+INSERT INTO migrations(key,value) VALUES('audio-normalization-v1','1');`;
 export type Statement = { sql: string; params?: Value[]; mode?: "get" | "all" | "run" };
 /** SQLite is synchronous only inside this worker; request handlers await RPC, never block on SQL. */
 export class Database {
@@ -107,6 +111,10 @@ export class Database {
         if(db.prepare('SELECT count(*) AS n FROM users').get().n) {const target=workerData.file+'.before-social-import-'+require('node:crypto').randomUUID()+'.sqlite';db.prepare('VACUUM INTO ?').run(target);require('node:fs').chmodSync(target,0o600);}
         db.exec('BEGIN IMMEDIATE');try{db.exec(workerData.socialSchema);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
       }
+      if(!db.prepare("SELECT key FROM migrations WHERE key='audio-normalization-v1'").get()){
+        if(db.prepare('SELECT count(*) AS n FROM users').get().n) {const target=workerData.file+'.before-audio-normalization-'+require('node:crypto').randomUUID()+'.sqlite';db.prepare('VACUUM INTO ?').run(target);require('node:fs').chmodSync(target,0o600);}
+        db.exec('BEGIN IMMEDIATE');try{db.exec(workerData.preferenceSchema);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+      }
       const execute=({sql,params=[],mode='run'})=>{const q=db.prepare(sql);const value=q[mode](...params);
         return mode==='run'?{changes:Number(value.changes),lastInsertRowid:Number(value.lastInsertRowid)}:value;};
       parentPort.on('message',({id,operation,statements})=>{try{let result;
@@ -116,7 +124,7 @@ export class Database {
         else result=execute(statements[0]);parentPort.postMessage({id,result});
       }catch(e){parentPort.postMessage({id,error:'Database operation failed',detail:e.message});}});
       parentPort.postMessage({id:0,result:true});`;
-    this.worker = new Worker(source, { eval: true, workerData: { file, schema, featureSchema, socialSchema } });
+    this.worker = new Worker(source, { eval: true, workerData: { file, schema, featureSchema, socialSchema, preferenceSchema } });
     this.worker.on("message", ({ id, result, error, detail }) => {
       const job = this.pending.get(id); if (!job) return; this.pending.delete(id);
       if (error) job.reject(new Error(error, { cause: detail })); else job.resolve(result);

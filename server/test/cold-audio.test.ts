@@ -48,3 +48,26 @@ test("candidate selection admission bounds a burst instead of opening unlimited 
   finally { release(); await settled; }
   assert.ok(max <= 8);
 });
+
+test("rejected URLs trigger one fresh candidate pass within the original deadline", async () => {
+  let passes = 0; let requests = 0;
+  const selected = await openAudioSource(id, new AbortController().signal, async () => { passes++; return [primary]; }, (async () => {
+    requests++; return requests === 1 ? new Response("expired", { status: 403 }) : new Response("fresh");
+  }) as typeof fetch, undefined, 1000);
+  assert.equal(await selected.response.text(), "fresh"); assert.equal(passes, 2); assert.equal(requests, 2);
+  passes = 0;
+  await assert.rejects(openAudioSource(id, new AbortController().signal, async () => { passes++; return [primary]; },
+    (async () => new Response("refused", { status: 403 })) as typeof fetch, undefined, 1000));
+  assert.equal(passes, 2, "a refusal must never cause an unbounded re-extraction loop");
+});
+
+test("unavailable/rate-limited candidates are not repeatedly resolved and failure reasons exclude provider text", async () => {
+  const { withPlaybackTrace } = await import("../src/playbackDiagnostics.js"); const events: any[] = []; let passes = 0;
+  await withPlaybackTrace({ traceId: "fixture", requestId: "fixture", emit: e => events.push(e) }, async () => {
+    await assert.rejects(openAudioSource(id, new AbortController().signal, async () => { passes++; return [primary]; },
+      (async () => new Response("provider secret", { status: 429 })) as typeof fetch, undefined, 1000));
+  });
+  assert.equal(passes, 1);
+  assert.ok(events.some(e => e.stage === "source.candidate_error" && e.status === 429 && e.reason === "http_status"));
+  assert.equal(JSON.stringify(events).includes("provider secret"), false);
+});

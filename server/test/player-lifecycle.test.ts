@@ -45,6 +45,7 @@ async function harness(options: { offline?: boolean; delayedReady?: boolean } = 
     h.api = { prepare: async () => ({}), prefetch: async (id: string, ids: string[]) => { h.prepares.push({ id, ids }); return { lookahead: 3, readyIds: options.delayedReady ? [] : ids }; },
     playbackSettings: async () => ({ lookahead: 3, videoQuality: "sd" }), radio: async () => [], videoFor: async () => null };
   const mocks = new Map([
+    ["lib/audioNormalization.ts", `export class AudioNormalization { start(){} reset(){} setMode(){} setVolume(media,volume,muted){media.volume=volume;media.muted=muted;} }`],
     ["stores/session.ts", `export const useSession={getState:()=>({offline:globalThis.__musikeHarness.offline})};export const accountRequest=async()=>{};`],
     ["lib/offlineDownloads.ts", `const h=globalThis.__musikeHarness;export const offlineAudioBlob=async id=>{h.reads.push(id);return h.cached.get(id)??null;};export const offlineAudioUrl=async id=>{const b=await offlineAudioBlob(id);return b?URL.createObjectURL(b):null;};export const cacheRecentAudio=()=>{};export const retainPreloadedAudio=async()=>{};export const touchDownloadedAudio=async()=>{};export const rememberOutput=async()=>{};`],
     ["lib/api.ts", `const h=globalThis.__musikeHarness;export const api=h.api;export const capabilities={video:true,engineSettings:false,retryOnError:false};export const systemMedia=null;export const streamSource=(id,kind,q,trace)=>'/api/stream/'+id+'/'+kind+'?trace='+trace;export const explainStreamError=async()=>h.errors;export const saveFile=async()=>{};`],
@@ -239,5 +240,36 @@ test("a scheduled hidden retry cannot resume after a deliberate pause or skip", 
     assert.equal(p().status, "paused"); assert.equal(f.h.plays, plays);
     p().toggle(); await f.tick(); f.h.elements[0].emit("error"); await f.tick(); p().next(); await f.tick();
     await new Promise((resolve) => setTimeout(resolve, 1050)); await f.tick(); assert.equal(p().index, 1); assert.equal(p().status, "playing");
+  } finally { await f.cleanup(); }
+});
+
+test("an automatic failure keeps notification intent during retries, then selects the next downloaded song", async () => {
+  const f = await harness(); const p = () => f.player.getState();
+  try {
+    f.h.messages.offline = { skippingDownloaded: "Playing downloaded", noNextDownloaded: "No downloaded songs" };
+    p().setAutoRadio(false); p().playList([track(1), track(2), track(3), track(4)]); await f.tick();
+    f.document.visibilityState = "hidden"; f.h.elements[0].emit("ended"); await f.tick();
+    f.h.cached.set(track(4).id, new Blob(["downloaded"], { type: "audio/mp4" }));
+    f.h.elements[0].emit("error"); await f.tick(); assert.equal(navigator.mediaSession.playbackState, "playing");
+    await new Promise(r => setTimeout(r, 550)); await f.tick();
+    f.h.elements[0].emit("error"); await new Promise(r => setTimeout(r, 1050)); await f.tick();
+    f.h.elements[0].emit("error"); await f.tick();
+    assert.equal(p().index, 3); assert.ok(f.h.elements[0].src.startsWith("blob:")); assert.equal(p().status, "playing");
+  } finally { await f.cleanup(); }
+});
+
+test("an exhausted automatic transition with no downloaded successor pauses, while a late ended task advances once", async () => {
+  const f = await harness(); const p = () => f.player.getState();
+  try {
+    f.h.messages.offline = { noNextDownloaded: "No downloaded songs" };
+    p().setAutoRadio(false); p().playList([track(1), track(2), track(3)]); await f.tick();
+    const audio = f.h.elements[0]; audio.ended = true; audio.paused = true;
+    f.h.intervals.find((timer: any) => timer.ms === 5000).run(); await f.tick(); assert.equal(p().index, 1);
+    audio.dispatchEvent(new Event("ended")); await f.tick(); assert.equal(p().index, 1, "a stale ended event must not skip another song");
+    audio.emit("error"); await new Promise(r => setTimeout(r, 550)); await f.tick();
+    audio.emit("error"); await new Promise(r => setTimeout(r, 1050)); await f.tick();
+    audio.emit("error"); await f.tick();
+    assert.equal(p().status, "paused"); assert.equal(p().statusText.error, "No downloaded songs");
+    assert.equal(navigator.mediaSession.playbackState, "paused");
   } finally { await f.cleanup(); }
 });

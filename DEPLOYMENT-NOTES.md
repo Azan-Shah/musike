@@ -1,3 +1,23 @@
+# Current delivery — approved production-source fixes, 23 November 2026
+
+Use `Musike_Production_Fixes_20261123.zip` as a complete source tree, or apply `Musike_Production_Fixes_20261123.patch` to the exact `musike-main (8).zip` baseline (SHA-256 `9bb76ecbf6423562b10cbf6af15229ec14bf954d4536913c46749476f3ee0128`). These are alternative installation methods. Do not reapply historical patches contained in the repository. The separately supplied updated Hermes report is preserved in the delivered source. This header supersedes earlier deployment instructions below.
+
+Build with repository-pinned pnpm 10.14.0: `corepack pnpm install --frozen-lockfile`, `corepack pnpm test`, `corepack pnpm typecheck`, `corepack pnpm build`, `corepack pnpm --filter @musike/server bundle`. No runtime dependency, lockfile, CSS, operator environment/compose or wrapper-content change is required. Preserve the wrapper executable bit. No deployment was performed.
+
+**New migration:** auth-enabled startup runs worker migration `audio-normalization-v1`, adding only `account_preferences` with owner PK/FK, enum normalization and increasing revision. Existing nonempty databases are consistently backed up before transactional DDL. Back up data and the instance secret through the normal operator procedure before demo startup. Auth-off mode does not open this database.
+
+Normalization is Quiet / Standard / Loud, Standard by default. The authenticated account preference propagates on existing presence heartbeats (normally 15 seconds), login or reconnect. Devices retain their own volume/mute. Offline uses the last verified preference; changing account-wide normalization requires connectivity. Streaming RMS level matching with a sample-peak limiter is not certified Spotify/EBU LUFS processing. Check the new AudioWorklet asset is delivered and precached. The existing audio/video elements are reused; actual Android AudioContext interruption, volume and Bluetooth behavior need demo acceptance.
+
+Offline Library uses an additive IndexedDB version 2 library-metadata store while preserving existing settings/audio/blobs/pins. After an online library load with caching enabled, Favorites/history/personal playlists become available as metadata offline. All downloaded audio remains reachable even outside the last online history snapshot. Missing tracks are grey and explain why they cannot play; online Downloads-view clicks download without interrupting playback. Pinning remains explicit. Audio budgets/64 MiB admission, pin protection, output eligibility/exclusive browser locks, logout purge and stop-before-reconnect remain. Do not clear site data as an upgrade step.
+
+Next-track preparation is up to three complete bodies, nearest first, one reader, 16 MiB each/48 MiB retained speculative bodies and the existing deadlines/backoff; respect server lookahead including zero. After two recoverable retries an automatic personal transition selects a complete prepared/downloaded successor, otherwise pauses. Jams retain canonical queues. No service-worker music scheduler, wake-lock workaround, silent media, native application or tunnel change is included.
+
+Demo first: follow the new acceptance section, including Samsung A07 normal playlist automatic locked transitions on mobile data, recovery/dead-zone cases, normalization across two accounts/devices and offline metadata/locks/logout. Automated tests do not certify this physical incident resolved.
+
+**Rollback:** retain the previous image/assets and consistent data/secret backups. The SQLite table is additive and ignored by older source. Older browser source that explicitly opens IndexedDB v1 cannot open v2 after upgrade: use a v2-compatible rollback build or restore this release; preserve downloads and do not delete IndexedDB as a workaround. Test the selected rollback on demo. No existing operator deployment files were changed.
+
+---
+
 # Current delivery — all-issues review and playback repair, 20 November 2026
 
 Use the complete `Musike_All_Bugfixes_20261120.zip` or apply `Musike_All_Bugfixes_20261120.patch` to the exact latest uploaded `musike-main (7).zip` baseline (SHA-256 `625ca84bc7115064a867eac89da4d59a76d47bcb92077a2abcc54dcbff8e4d96`). The patch and ZIP are alternative installation methods; do not apply historical patches in the repository again. Preserve operator-owned environment/compose files and runtime volumes. No migration, dependency upgrade, endpoint, proxy/tunnel or configuration change is needed.

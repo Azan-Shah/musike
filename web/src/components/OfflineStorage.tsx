@@ -1,9 +1,10 @@
+import { useLibrary } from "../stores/library";
 import { useEffect, useState } from "react";
 import { useT } from "../i18n";
 import { useOffline } from "../stores/offline";
 import { useSession } from "../stores/session";
 import { BUDGETS, MIB } from "../lib/offlineStore";
-import { cancelOfflineDownloads, clearOfflineRecents, pinOfflinePlaylist, playlistRevision, refreshOffline, setOfflineBudget, unpinOfflinePlaylist } from "../lib/offlineDownloads";
+import { cancelOfflineDownloads, clearOfflineRecents, pinOfflinePlaylist, playlistRevision, refreshOffline, setOfflineBudget, snapshotOfflineLibrary, unpinOfflinePlaylist } from "../lib/offlineDownloads";
 import type { Playlist } from "../lib/types";
 
 const size = (bytes: number) => `${(bytes / MIB).toFixed(1)} MiB`;
@@ -15,7 +16,7 @@ export function OfflineStorage() {
     return () => channel?.close();
   }, []);
   useEffect(() => { if (state.summary) setBudget(state.summary.settings.budget / MIB); }, [state.summary?.settings.budget]);
-  const run = async (work: () => Promise<unknown>) => { setWorking(true); try { await work(); } catch { useOffline.setState({ error: f.storageUnavailable }); } finally { setWorking(false); } };
+  const run = async (work: () => Promise<unknown>) => { setWorking(true); try { await work(); const library = useLibrary.getState(); if (!offline && library.status === "ready") await snapshotOfflineLibrary({ favorites: library.favorites, playlists: library.playlists, history: library.history }); } catch { useOffline.setState({ error: f.storageUnavailable }); } finally { setWorking(false); } };
   return <section className="my-4 flex flex-col gap-3 rounded-2xl bg-surface-2 p-4 text-sm" aria-label={f.title}>
     <h2 className="font-semibold">{f.title}</h2>
     <p className="text-fg-2">{f.notice}</p>

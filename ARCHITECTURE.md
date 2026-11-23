@@ -493,3 +493,59 @@ The 512 MiB/1 GiB/2 GiB budget is chosen on this browser installation/account; s
 `musike:offline-owner` points to the last online-verified cached owner; `musike:output-device:<owner>` remembers the installation's last granted document, avoiding mirror-tab revocation. The player keeps its existing `musike:player:<owner>` key. The offline view grants output only for an eligible installation and an exclusive `navigator.locks` lock `musike-offline-output:<owner>`; unsupported/contended locks fail closed. No offline transfer, jam or live cross-device control exists. On reconnect, stop local output, revalidate `/api/auth/me`, reload and await the existing server output grant. During a disconnection, another device's explicit server takeover cannot be observed; concurrent audible playback across that partition remains possible by the user's accepted policy. No silent timer takeover was added.
 
 Tests add only `fake-indexeddb@6.2.4` and `jsdom@27.2.0` to server devDependencies; existing runtime dependency versions and lock entries are preserved. Fixtures exercise actual React SVG callbacks, real browser coordinator modules, synthetic media lifecycle, IndexedDB semantics, complete-body admission, interruption, auth fallback and cleanup. Physical Samsung and real-browser offline/PWA acceptance remain separate.
+
+
+## 9. Approved recovery, normalization and shared offline Library — 23 November 2026
+
+Baseline: user upload `musike-main (8).zip`, plus the separately supplied `HERMES_FOUND_BUGS.md` dated 23 November. This section supersedes the single-body and standalone-offline-view descriptions above. Existing fork boundaries, one owning process, auth-off JSON mode, account/device/jam ownership and operator-file restrictions remain.
+
+### File/function boundaries
+
+| Modules | Responsibility |
+| --- | --- |
+| `web/src/player/player.ts` — `load`, `warmQueue`, `wire`, `onEnded`, `onError`, `downloadedFallback` | Stable authorized audio output; terminal-state reconciliation and duplicate-end protection; two recoverable retries, then an actual downloaded successor for personal automatic playback. Queue/intent/token/output fences cancel stale work; jam playback does not substitute local queue entries. |
+| `web/src/lib/playbackWindow.ts` — `PlaybackWindow` | One nearest-first reader, at most three `PlaybackPreload` entries, 16 MiB/body. Same upcoming bodies survive queue advancement; stale entries abort/revoke. Server lookahead remains authoritative. |
+| `web/src/lib/playbackFallback.ts` — `nextDownloaded` | Asynchronous single pass through remaining queue (one repeat-all wrap), validates complete audio bodies and intent after each read. |
+| `web/src/lib/playbackPreload.ts`, `playbackDiagnostics.ts` | Existing complete-body/deadline/backoff checks; allowlisted failure categories; successful queue-poll sampling within the existing 200-event ring. Errors remain retained. |
+| `server/src/audioCache.ts` — `audioCandidates`, `openAudioSource`, `raceAudioSource` | Safe metadata/transport failure classification; at most one fresh candidate pass on confirmed 403/410, within the existing acquisition deadline. Existing worker/process/cache admission, budget, leases and cancellation remain. |
+| `web/src/lib/audioNormalizationCore.ts` — `NormalizationCore` | Browser-safe streaming RMS matching with silence gate, +12 dB approximate amplification cap, linked-channel -1 dBFS sample-peak protection, smoothed gain and track reset. Not integrated-LUFS/true-peak certification. |
+| `web/src/lib/audioNormalization.worklet.ts` | Worklet rendering-thread adapter; receives only mode/reset messages and audio samples. Vite emits its fingerprinted JS asset; the normal app precache includes it. |
+| `web/src/lib/audioNormalization.ts` — `AudioNormalization` | One context, one source per existing media element, worklet then user volume/mute gain. Attach only after successful setup/resume; failed initialization leaves direct output, failed processors bypass through the user-volume gain. No spare playback element or server transcoding. |
+| `server/src/accounts.ts`, `accountRoutes.ts`, `db.ts` | Authenticated-owner preference RPC, validated PATCH, preference fields in existing auth/presence responses, backed-up transactional migration. No private SQL on Fastify's event loop. |
+| `web/src/stores/session.ts`, `components/AuthGate.tsx`, `SettingsDialog.tsx` | Account preference writes and increasing-revision reconciliation; existing presence refresh; existing segmented controls. Standard default, three modes only. Offline uses last cached preference; auth-off local key is `musike:normalization`. |
+| `web/src/lib/offlineStore.ts`, `offlineDownloads.ts`, `stores/library.ts` | Owner-keyed opt-in library metadata; complete audio downloads; bounded explicit 100-track request queue; last-synced non-secret normalization value; owner purge and generation checks. Snapshot subscriptions remain outside the injectable optimistic store. |
+| `views/OfflineLibrary.tsx`, `Library.tsx`, `Collection.tsx`, `components/TrackList.tsx` | Shared online/offline layouts and bounded rows; availability display and filtered local playback; explicit online download clicks; Favorites/history/personal playlists and all-downloads collection. The offline wrapper retains eligibility, exclusive Web Lock, logout and stop-before-reconnect. |
+| `components/Rail.tsx`, `MobileChrome.tsx`, `Controls.tsx`, `hooks/useShortcuts.ts` | Reuse normal navigation/player presentation; hide offline mutations, discovery, social, video and device actions. Offline library data is read-only; local transport/seek/shuffle/repeat/volume remain. |
+| `components/OfflineStorage.tsx`, `i18n/en.ts` | Existing explicit storage/pin management and new typed labels. `pt.offline` already inherits `en.offline`; no separate Portuguese keys or CSS variables are added. |
+
+Normalization targets: Quiet -23, Standard -18, Loud -14 dBFS RMS before user volume. Peak limiting is sample-based. The setting is independent of the existing device-local volume and jam/device command serialization. Unsupported/failed worklet initialization leaves ordinary playback with a diagnostic event. OS interruption/suspension can still stop an AudioContext; physical audio/background acceptance is required.
+
+Preparation retains at most 48 MiB of complete speculative network bodies, plus the existing active body and one bounded in-flight reader. Speculative persistent hydration also respects the 16 MiB per-entry window cap; an existing larger download can still be loaded directly through the normal audio-only 64 MiB admission path. A partially downloaded body is never published as ready. No screen wake lock or service-worker audio scheduler is added.
+
+### API and SQLite additions
+
+| Contract | Exact behavior |
+| --- | --- |
+| `PATCH /api/account/preferences` | Existing login/status/origin/CSRF wall; `{normalization:"quiet"|"standard"|"loud"}`; owner always from authenticated session. Returns `{normalization,revision}`. Auth-off/unavailable accounts return 401. |
+| `GET /api/auth/me` | Authenticated responses add `preferences:{normalization,revision}`. Missing owned row defaults to Standard/revision 0. No preference object is required for auth-off or unauthenticated responses. |
+| `POST /api/presence` | Existing authenticated response adds the same preferences. Other devices receive changes on their next successful 15-second heartbeat or login/reconnect; hidden-browser timers may be delayed. |
+
+Migration marker: `audio-normalization-v1`. Existing nonempty databases receive worker `VACUUM INTO` backup with mode 0600 before `BEGIN IMMEDIATE`; DDL and marker commit together, reopening skips it. All lookups/upserts are parameterized and keyed by authenticated user ID. PK supplies the lookup index; user deletion cascades. The revision increments atomically on each preference write; stale browser responses cannot replace a higher revision.
+
+```sql
+CREATE TABLE account_preferences(
+ user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ normalization TEXT NOT NULL DEFAULT 'standard' CHECK(normalization IN ('quiet','standard','loud')),
+ revision INTEGER NOT NULL DEFAULT 0
+);
+```
+
+### Browser metadata and route contracts
+
+`musike-offline` IndexedDB version is now **2**. Existing settings/audio/blobs/pins stores, keys and indexes are preserved. Added `library` store: keyPath `owner`, value `{owner,library:Library}`, with its primary-key owner lookup. Snapshot admission is opt-in and capped at 8 MiB; a rejected snapshot leaves the previous complete one. Settings add optional `normalization`, a non-secret last-synced value. Logout/purge removes the owner library row with the other owner stores. No general authenticated API response cache is introduced.
+
+Offline entry uses this metadata only after the existing authenticated-offline eligibility checks. It does not confer a server session, admin role or output grant. Private shared grants are not cached as offline access; users still make an explicit personal copy first. All original pin/budget/64 MiB audio-body/Web Lock/auth/logout/reconnect rules remain.
+
+Existing `/library`, `/favorites`, `/history`, `/playlist/:id` and `/offline` paths remain. `/offline?view=tracks` shows All downloaded audio through the same Collection/TrackList; `?downloads=1` on online collection links enables the downloaded-only playback/download interaction. Offline unsupported routes redirect to Library. Reuse the existing `data-route-ready` hook; no new DOM ID, root attribute, CSS variable or inline styling system is introduced.
+
+Rollback note: older browser code that explicitly opens IndexedDB version 1 cannot open an already-upgraded version 2 database. Preserve data and use a version-2-compatible rollback build or restore this release; do not clear downloaded audio to resolve a version mismatch. The SQLite addition is additive, but normal consistent data/secret backups remain required.

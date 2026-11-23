@@ -1,8 +1,12 @@
+import { useSession } from "../stores/session";
+import { downloadOfflineTrack } from "../lib/offlineDownloads";
+import { useOffline } from "../stores/offline";
+import { toast } from "../stores/ui";
 import { ClockIcon, DotsThreeIcon, HeartIcon, VideoCameraIcon } from "@phosphor-icons/react";
 import { memo, useCallback, useMemo, type MouseEvent } from "react";
 import { useListPage } from "../hooks/useListPage";
 import { ListPager } from "./ListPager";
-import { useT } from "../i18n";
+import { getT, useT } from "../i18n";
 import { cn, formatTime } from "../lib/format";
 import type { Track } from "../lib/types";
 import { selectCurrent, usePlayer } from "../player/player";
@@ -19,9 +23,11 @@ interface RowProps {
   isFavorite: boolean;
   playlistId?: string;
   showAlbum: boolean;
+  unavailable?: boolean;
+  readOnly?: boolean;
 }
 
-const TrackRow = memo(function TrackRow({ track, position, onPlay, isFavorite, playlistId, showAlbum }: RowProps) {
+const TrackRow = memo(function TrackRow({ track, position, onPlay, isFavorite, playlistId, showAlbum, unavailable, readOnly }: RowProps) {
   const isCurrent = usePlayer((s) => selectCurrent(s)?.id === track.id);
   const isPlaying = usePlayer((s) => selectCurrent(s)?.id === track.id && (s.status === "playing" || s.status === "loading"));
   const toggleFavorite = useLibrary((s) => s.toggleFavorite);
@@ -38,8 +44,9 @@ const TrackRow = memo(function TrackRow({ track, position, onPlay, isFavorite, p
 
   return (
     <li
-      onContextMenu={menuAt}
+      onContextMenu={readOnly ? undefined : menuAt}
       className={cn(
+        unavailable && "opacity-50",
         "group relative grid items-center gap-3 rounded-xl px-2 py-1.5 transition-colors duration-150 hover:bg-surface-2 md:px-3",
         showAlbum
           ? "grid-cols-[auto_1fr_auto] md:grid-cols-[28px_auto_1fr_auto_auto] lg:grid-cols-[28px_auto_minmax(0,1.4fr)_minmax(0,1fr)_auto_auto]"
@@ -70,6 +77,7 @@ const TrackRow = memo(function TrackRow({ track, position, onPlay, isFavorite, p
         <p className={cn("truncate text-[15px] leading-tight font-medium", isCurrent ? "text-accent-text" : "text-fg")}>
           {track.title}
         </p>
+        {unavailable && <span className="text-xs text-fg-3">{t.offline.notDownloaded}</span>}
         <p className="mt-0.5 flex items-center gap-1.5 truncate text-[13px] text-fg-2">
           {track.kind === "video" && <VideoCameraIcon size={13} className="shrink-0 text-fg-3" aria-label={t.common.video} />}
           <span className="truncate">{track.artist || t.common.youtube}</span>
@@ -79,7 +87,7 @@ const TrackRow = memo(function TrackRow({ track, position, onPlay, isFavorite, p
       {showAlbum && <p className="pointer-events-none hidden truncate text-sm text-fg-2 lg:block">{track.album ?? ""}</p>}
 
       <div className="relative z-10 hidden items-center gap-1 md:flex">
-        <button
+        {!readOnly && <button
           type="button"
           onClick={() => void toggleFavorite(track)}
           aria-label={isFavorite ? t.common.removeFromFavorites : t.common.addToFavorites}
@@ -90,13 +98,13 @@ const TrackRow = memo(function TrackRow({ track, position, onPlay, isFavorite, p
           )}
         >
           <HeartIcon size={17} weight={isFavorite ? "fill" : "regular"} />
-        </button>
+        </button>}
         <span className="pointer-events-none w-11 text-right font-mono text-[13px] text-fg-3 tabular-nums">
           {track.duration ? formatTime(track.duration) : ""}
         </span>
       </div>
 
-      <button
+      {!readOnly && <button
         type="button"
         onClick={menuAt}
         aria-label={t.trackList.moreFor(track.title)}
@@ -104,7 +112,7 @@ const TrackRow = memo(function TrackRow({ track, position, onPlay, isFavorite, p
         className="relative z-10 grid size-9 place-items-center rounded-full text-fg-2 transition-[opacity,background-color] hover:bg-surface-3 hover:text-fg md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
       >
         <DotsThreeIcon size={22} weight="bold" />
-      </button>
+      </button>}
     </li>
   );
 });
@@ -117,15 +125,29 @@ interface ListProps {
   playlistId?: string;
   showAlbum?: boolean;
   header?: boolean;
+  downloads?: boolean;
 }
 
-export function TrackList({ tracks, context, playlistId, listKey, showAlbum: albumWanted = true, header = true }: ListProps) {
+export function TrackList({ tracks, context, playlistId, listKey, showAlbum: albumWanted = true, header = true, downloads = false }: ListProps) {
+  const offline = useSession(s => !!s.offline);
+  const entries = useOffline(s => s.summary?.entries);
+  const available = useMemo(() => new Set(entries?.map(e => e.id)), [entries]);
   const playList = usePlayer((s) => s.playList);
   const favorites = useLibrary((s) => s.favorites);
   const favoriteIds = useMemo(() => new Set(favorites.map((track) => track.id)), [favorites]);
   const page = useListPage(tracks, listKey);
   const queue = context ?? tracks;
-  const onPlay = useCallback((position: number) => playList(queue, position), [playList, queue]);
+  const onPlay = useCallback((position: number) => {
+    const track = tracks[position]; if (!track) return;
+    if ((offline || downloads) && !available.has(track.id)) {
+      if (offline) toast(getT().offline.notDownloaded, "error");
+      else void downloadOfflineTrack(track).then(() => toast(getT().offline.downloadQueued)).catch(error => toast(error.message, "error"));
+      return;
+    }
+    const playable = offline || downloads ? queue.filter(track => available.has(track.id)) : queue;
+    if (offline || downloads) { usePlayer.getState().setPreferVideo(false); usePlayer.getState().setAutoRadio(false); }
+    playList(playable, Math.max(0, playable.findIndex(item => item.id === track.id)));
+  }, [playList, queue, tracks, available, offline, downloads]);
   const t = useT();
   // Pages ask for the album column where it makes sense; Settings can turn it off everywhere.
   const showAlbum = useAppearance((s) => s.albumColumn) && albumWanted;
@@ -158,6 +180,8 @@ export function TrackList({ tracks, context, playlistId, listKey, showAlbum: alb
             position={page.start + i}
             playlistId={playlistId}
             showAlbum={showAlbum}
+            unavailable={(offline || downloads) && !available.has(t.id)}
+            readOnly={offline}
             onPlay={onPlay}
             isFavorite={favoriteIds.has(t.id)}
           />

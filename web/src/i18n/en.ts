@@ -7,6 +7,19 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 
 export const en = {
   offline: {
+    allDownloaded: "All downloaded audio",
+    downloadQueueFull: "The download queue is full. Wait for a download to finish.",
+    metadataUnavailable: "The latest library could not be saved offline. Existing downloads are still available.",
+    skippingDownloaded: "This song is unavailable. Playing the next downloaded song.",
+    noNextDownloaded: "Playback paused. No more downloaded songs are available in this queue.",
+    notDownloaded: "This song is not downloaded.",
+    downloadQueued: "Queued for download. Playback will continue unchanged.",
+    downloadedCount: (available: number, total: number) => `${available} of ${total} downloaded`,
+    normalization: "Volume normalization",
+    normalizationNote: "Match audio levels between songs and videos. Synced across your account’s devices.",
+    normalizationOffline: "Using your last synced level. Connect to change it.",
+    quiet: "Quiet", standard: "Standard", loud: "Loud",
+    preferenceFailed: "Could not save your audio setting. Please try again.",
     title: "Offline audio", open: "Downloads", enable: "Enable audio caching", disable: "Pause caching", budget: "Audio storage budget",
     notice: "Downloads use your current Wi-Fi or mobile data. Audio only, including audio from YouTube videos. Shared playlists need a personal copy before downloading.",
     audioUsage: "Downloaded audio", siteUsage: "Estimated total site storage", siteNote: "The site estimate includes artwork, app files and other browser data; it is not the audio total.",

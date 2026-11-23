@@ -1,3 +1,12 @@
+## 23 November 2026 — playback recovery, account normalization and shared offline Library
+
+- BUG-007/022: preserve notification play intent through bounded recovery; actual-ended/duplicate guards; three bounded nearest-first complete upcoming bodies; next-downloaded successor after exhausted automatic personal retries; better lifecycle evidence and classified origin failures.
+- BUG-001/004/006: retain previous mitigations; add one deadline-bounded fresh candidate pass after confirmed 403/410 and safe transport/provider categories. Origin evidence does not establish expired URLs or mobile dead-zone causation; probes intentionally read recorded errors.
+- BUG-027: Quiet/Standard/Loud (Standard default), measured browser audio/video level matching with sample-peak protection, independent volume/mute and owner-scoped account preference synchronization. Add backed-up `audio-normalization-v1` worker migration and authenticated PATCH contract.
+- BUG-028/023: reuse online Library/Collection/player components offline, grey missing bodies, preserve all-downloads access, explicit online individual download queue, read-only offline metadata/navigation, non-destructive IndexedDB v2 owner snapshots and logout purge.
+- BUG-002/003/005/008–021/024–026 reviewed: existing accepted source fixes/guardrails retained; external provider, SDK, tunnel, Docker and physical-device acceptance remains separate. Wrapper content, runtime dependencies, lockfile, CSS and operator configuration are unchanged; archive-lost wrapper executable bit is restored.
+- Validation: 165 tests, no failures/skips/cancellations; TypeScript, web/PWA and server bundle pass. No deployment. A07 locked automatic transitions, actual Web Audio output/visuals and real storage acceptance remain pending.
+
 # 20 November 2026 — approved all-issues review / BUG-025–026 and Android transitions
 
 - Fixed unchanged lookahead queues permanently blocked by BudgetFull; preserve bounded 30-second retries, revisions, active leases and no-thrash behavior.

@@ -36,7 +36,13 @@ export async function* audioCandidates(id: string, signal: AbortSignal): AsyncGe
   const resolve = async (source: "primary" | "direct", work: () => Promise<StreamFormat>) => {
     const started = Date.now(); playbackStage("source.resolve", { videoId: id, source });
     try { const format = await work(); playbackStage("source.resolved", { videoId: id, source, ms: Date.now() - started }); return format; }
-    catch (error) { playbackStage("source.resolve_failed", { videoId: id, source, ms: Date.now() - started, reason: signal.aborted ? "cancelled" : "provider" }); throw error; }
+    catch (error) {
+      const status = error instanceof HttpError ? error.status : undefined;
+      const reason = signal.aborted ? "cancelled" : error instanceof HttpError && error.code ? error.code :
+        status === 404 ? "unavailable" : status === 403 ? "restricted" : status === 504 ? "timeout" : "provider";
+      playbackStage(signal.aborted ? "source.resolve_failed" : "source.resolve_error", { videoId: id, source, ms: Date.now() - started, status, reason });
+      throw error;
+    }
   };
   yield* readyCandidates([
     resolve("primary", () => resolveStreams(id, signal).then((result) => result.audio)),
@@ -61,6 +67,7 @@ async function raceAudioSource(id: string, signal: AbortSignal, candidates: Cand
   const controllers = new Set<AbortController>();
   return new Promise<{ format: StreamFormat; response: Response; cancel: () => void }>((resolve, reject) => {
     let settled = false; let enumerated = false; let active = 0;
+    let rejectedUrl = false; let refreshed = false;
     const finishError = (error: Error) => {
       if (settled) return; settled = true; clearTimeout(deadline); discovery.abort();
       for (const controller of controllers) controller.abort();
@@ -69,23 +76,37 @@ async function raceAudioSource(id: string, signal: AbortSignal, candidates: Cand
     const cancelled = () => finishError(aborted());
     const deadline = setTimeout(() => finishError(new HttpError(504, msg("playbackTimeout"))), timeoutMs);
     signal.addEventListener("abort", cancelled, { once: true });
-    const failed = () => { if (enumerated && !active && !settled) finishError(new HttpError(502, msg("noAudio"))); };
+    const failed = () => {
+      if (!enumerated || active || settled) return;
+      if (rejectedUrl && !refreshed && !signal.aborted) {
+        refreshed = true; enumerated = false; invalidate(id);
+        playbackStage("source.refresh", { videoId: id, reason: "url_rejected" });
+        void discover(); return;
+      }
+      playbackStage("source.error", { videoId: id, status: 502, reason: "all_candidates_failed", ms: Date.now() - started });
+      finishError(new HttpError(502, msg("noAudio")));
+    };
     const attempt = async (format: StreamFormat) => {
       if (settled || !["audio/mp4", "audio/webm"].includes(format.mime)) return;
       active++; const controller = new AbortController(); controllers.add(controller);
-      const firstByteTimer = setTimeout(() => controller.abort(), Math.min(8000, timeoutMs));
+      let timedOut = false; let reason = "network";
+      const source = format.formatId === "fallback" || format.formatId === "direct" ? "direct" : "primary";
+      const firstByteTimer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.min(8000, timeoutMs));
       try {
         playbackStage("source.open", { videoId: id, source: format.formatId === "fallback" || format.formatId === "direct" ? "direct" : "primary" });
         const response = await transport(format.url, { headers: { ...format.headers, ...(range ? { Range: range } : {}) },
           signal: AbortSignal.any([signal, controller.signal]) });
         const badType = /text\/html|application\/json/i.test(response.headers.get("content-type") ?? "");
         if ((!response.ok && response.status !== 416) || badType || !response.body && response.status !== 416) {
+          reason = !response.ok ? "http_status" : badType ? "unexpected_content" : "missing_body";
+          if (response.status === 403 || response.status === 410) rejectedUrl = true;
+          playbackStage("source.candidate_error", { videoId: id, source, reason, status: response.status });
           await response.body?.cancel(); invalidate(id); throw new Error("refused");
         }
         if (response.status === 416) await response.body?.cancel();
         const reader = response.status === 416 ? undefined : response.body?.getReader();
         const first = response.status === 416 ? null : await reader!.read();
-        if (first?.done || first && !first.value.byteLength) { await reader?.cancel(); throw new Error("empty"); }
+        if (first?.done || first && !first.value.byteLength) { reason = "empty_body"; await reader?.cancel(); throw new Error("empty"); }
         clearTimeout(firstByteTimer);
         if (settled) { await reader?.cancel(); controller.abort(); return; }
         settled = true; clearTimeout(deadline); signal.removeEventListener("abort", cancelled); discovery.abort();
@@ -104,17 +125,20 @@ async function raceAudioSource(id: string, signal: AbortSignal, candidates: Cand
           async cancel() { controller.abort(); await reader?.cancel().catch(() => {}); },
         });
         resolve({ format, response: new Response(body, { status: response.status, headers: response.headers }), cancel: () => controller.abort() });
-      } catch {
+      } catch (error) {
         clearTimeout(firstByteTimer); controller.abort();
-        playbackStage("source.candidate_failed", { videoId: id, ms: Date.now() - started, reason: signal.aborted ? "cancelled" : "refused_or_timeout" });
+        const code = (error as { cause?: { code?: unknown }; code?: unknown })?.cause?.code ?? (error as { code?: unknown })?.code;
+        const network = code === "ENOTFOUND" || code === "EAI_AGAIN" ? "dns" : code === "ECONNRESET" ? "connection_reset" : code === "ETIMEDOUT" ? "timeout" : reason;
+        playbackStage("source.candidate_error", { videoId: id, source, ms: Date.now() - started, reason: signal.aborted ? "cancelled" : timedOut ? "first_byte_timeout" : network });
       } finally { active--; controllers.delete(controller); failed(); }
     };
-    void (async () => {
+    async function discover() {
       try { for await (const format of await candidates(id, AbortSignal.any([signal, discovery.signal]))) {
         if (settled) break; void attempt(format);
-      } } catch { /* A successful candidate cancels discovery; otherwise failed() closes the race. */ }
+      } } catch { if (!settled && !signal.aborted) playbackStage("source.discovery_error", { videoId: id, reason: "provider" }); }
       finally { enumerated = true; failed(); }
-    })();
+    }
+    void discover();
   });
 }
 

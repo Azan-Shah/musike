@@ -1,3 +1,28 @@
+# Current acceptance — approved source revision, 23 November 2026
+
+These checked items are source/fixture/build results. Older sections remain historical evidence.
+
+- [x] Full application/regression suite: 165 tests, no failed/skipped/cancelled.
+- [x] Owner-only account preferences, Standard default/three-level validation, CSRF/auth checks, other-account isolation, heartbeat visibility, increasing revisions, transactional backup/idempotent migration/PK lookup and cascading deletion fixtures.
+- [x] Real normalization DSP on synthetic samples: level matching across different amplitudes, ordered modes, bounded peaks, silence/invalid samples and stereo/reset; graph fixtures cover stable audio/video sources, independent volume/mute and safe initialization/processor failure paths.
+- [x] Actual player with synthetic media: hidden automatic retry intent, downloaded fallback, no-downloaded pause, late-ended and stale-ended protection; existing pause/skip/output/repeat/jam regressions remain.
+- [x] Three-body nearest-first preparation with one reader, retained successors and stale-window cancellation; existing byte limits/backoff/truncation tests pass.
+- [x] One fresh source pass after confirmed rejected URL, no endless/rate-limit refresh, safe failure fields and non-resolving error probes.
+- [x] Real React/DOM Library/TrackList: full metadata cards, grey interactive missing rows, no offline favorite writes, local-only playback queue and online download click without playback interruption.
+- [x] IndexedDB v1-to-v2 preservation, opt-in snapshots, owner isolation, metadata limit retaining the previous snapshot, logout purge; existing audio admission/quota/pin/output fixtures pass.
+- [x] Individual downloads queued during a playlist job are retained and remain unpinned.
+- [x] Server/web typechecks, production web/PWA and server bundle; worklet emitted as fingerprinted JS and precached. No runtime dependency/CSS/operator-content change.
+- [ ] Samsung A07 installed PWA: normal playlist on mobile data, at least 30 minutes and ten automatic locked transitions; retain notification controls and audible playback. Repeat with car/Bluetooth controls and rapid manual skips, then Wi-Fi.
+- [ ] A07: intentional loss/restoration of connectivity; two bounded retries, next prepared/downloaded successor in order, pause if none remains; deliberate Pause/Next/Previous and output transfer must cancel pending recovery. Capture the new diagnostic categories and correlate with origin logs.
+- [ ] Real audio: Quiet/Standard/Loud on streamed music, video, downloaded audio and jam output, volume slider/mute and silence, headset/Bluetooth, lock/unlock and external audio interruption. Verify no silence from a suspended/failed graph and no unwanted extra output. DSP/mock tests are not physical audio acceptance.
+- [ ] Two real devices on the same account: normalization change propagates on heartbeat/reconnect without changing device volume; another account remains unchanged. Offline retains last synced level; edits require online connectivity.
+- [ ] Real narrow/wide/TV visual/focus/scroll review. Offline Library/Favorites/history/personal playlists/all-downloads navigate correctly; grey tracks explain unavailability; online explicit download does not start playback or silently pin. Existing Modal/import behavior remains.
+- [ ] Upgrade a real populated PWA without clearing data; verify downloaded bodies/pins, metadata quota rejection, browser persistence denial and explicit logout of one account. Exercise two-tab Web Lock contention, ineligible output and reconnect/auth-failure races.
+- [ ] Actual Node 22 Docker image/startup migration, consistent backup and rollback, including browser IndexedDB v2 compatibility. Keep existing outstanding provider/import/Discord/tunnel checks below.
+- [ ] Operator demo acceptance and separate production promotion. No deployment performed here.
+
+---
+
 # Current acceptance — all-issues review and playback repair, 20 November 2026
 
 Baseline: `musike-main (7).zip`, SHA-256 `625ca84bc7115064a867eac89da4d59a76d47bcb92077a2abcc54dcbff8e4d96`. This section supersedes older source-result counts; earlier records remain historical evidence.

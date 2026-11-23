@@ -1,3 +1,4 @@
+import { useSession } from "../stores/session";
 import {
   HeartIcon,
   MusicNotesIcon,
@@ -145,9 +146,11 @@ export function Volume({ className }: { className?: string }) {
 }
 
 export function FavoriteButton({ track, size = "md" }: { track: Track | null; size?: "sm" | "md" | "lg" }) {
+  const offline = useSession(s => !!s.offline);
   const isFavorite = useLibrary((s) => !!track && trackIds(s.favorites).has(track.id));
   const toggle = useLibrary((s) => s.toggleFavorite);
   const t = useT();
+  if (offline) return null;
   return (
     <IconButton
       label={isFavorite ? t.common.removeFromFavorites : t.common.addToFavorites}
@@ -163,6 +166,7 @@ export function FavoriteButton({ track, size = "md" }: { track: Track | null; si
 
 /** Audio / Video segmented switch. For songs, Video plays the song's music video when YouTube has one. */
 export function ModeSwitch({ className }: { className?: string }) {
+  const offline = useSession(s => !!s.offline);
   const t = useT();
   const preferVideo = usePlayer((s) => s.preferVideo);
   const setPreferVideo = usePlayer((s) => s.setPreferVideo);
@@ -170,7 +174,7 @@ export function ModeSwitch({ className }: { className?: string }) {
   const setQuality = usePlayer((s) => s.setQuality);
   const showingVideo = usePlayer((s) => s.mediaKind === "video");
   // The Android app plays audio only for now.
-  if (!capabilities.video) return null;
+  if (!capabilities.video || offline) return null;
 
   const seg = (on: boolean) =>
     cn(

@@ -1,6 +1,6 @@
 import { useSession } from "../stores/session";
 import { UsersIcon } from "@phosphor-icons/react";
-import { BooksIcon, HouseIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { BooksIcon, HouseIcon, MagnifyingGlassIcon, HeartIcon, ClockCounterClockwiseIcon } from "@phosphor-icons/react";
 import { NavLink, useNavigate } from "react-router";
 import { cn } from "../lib/format";
 import { useT } from "../i18n";
@@ -18,14 +18,20 @@ const tabs = [
 
 export function TabBar() {
   const signedIn = useSession(s => !!s.user);
+  const offline = useSession(s => !!s.offline);
+  const visible = offline ? [
+    { to: paths.library, key: "library", Icon: BooksIcon, end: false },
+    { to: paths.favorites, key: "favorites", Icon: HeartIcon, end: false },
+    { to: paths.history, key: "recentlyPlayed", Icon: ClockCounterClockwiseIcon, end: false },
+  ] as const : tabs.filter(item => item.key !== "social" || signedIn);
   const t = useT();
   return (
     <nav
       aria-label={t.nav.main}
       className="safe-bottom fixed inset-x-0 bottom-0 z-20 border-t border-line bg-bg/85 backdrop-blur-xl"
     >
-      <ul className={cn("mx-auto grid h-16 max-w-md", signedIn ? "grid-cols-4" : "grid-cols-3")}>
-        {tabs.filter(item => item.key !== "social" || signedIn).map(({ to, key, Icon, end }) => (
+      <ul className={cn("mx-auto grid h-16 max-w-md", signedIn && !offline ? "grid-cols-4" : "grid-cols-3")}>
+        {visible.map(({ to, key, Icon, end }) => (
           <li key={to}>
             <NavLink
               to={to}

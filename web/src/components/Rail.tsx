@@ -97,6 +97,7 @@ function RailLink({ to, label, sub, end, children }: { to: string; label: string
 
 export function Rail() {
   const signedIn = useSession(s => !!s.user);
+  const offline = useSession(s => !!s.offline);
   const t = useT();
   const sidebarPlaylists = useAppearance((s) => s.sidebarPlaylists);
   const playlists = useLibrary((s) => s.playlists);
@@ -116,7 +117,7 @@ export function Rail() {
         </div>
 
         <nav aria-label={t.nav.main} className="flex flex-col gap-1 px-2">
-          {nav.filter(item => item.key !== "social" || signedIn).map(({ to, key, Icon, end }) => (
+          {nav.filter(item => offline ? item.key === "library" : item.key !== "social" || signedIn).map(({ to, key, Icon, end }) => (
             <NavLink
               key={to}
               to={to}
@@ -143,7 +144,7 @@ export function Rail() {
 
         <div className="flex items-center justify-between px-4 pb-1 [@media(max-height:540px)]:pb-0">
           <span className="hidden text-xs font-medium text-fg-3 wide:block">{t.nav.yourCollection}</span>
-          <button
+          {!offline && <button
             type="button"
             onClick={() => setCreating(true)}
             aria-label={t.nav.newPlaylist}
@@ -151,7 +152,7 @@ export function Rail() {
             className="mx-auto grid size-8 place-items-center rounded-full text-fg-2 transition-colors hover:bg-surface-3 hover:text-fg wide:mx-0"
           >
             <PlusIcon size={18} />
-          </button>
+          </button>}
         </div>
 
         <div className="scroll-area flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-2">

@@ -1,3 +1,4 @@
+import { normalizationOf, type Normalization } from "../lib/audioNormalizationCore";
 import {
   ArrowsClockwiseIcon,
   CheckCircleIcon,
@@ -13,7 +14,7 @@ import { capabilities, type Channel } from "../lib/api";
 import { cn } from "../lib/format";
 import { useSystem } from "../stores/system";
 import { useUi } from "../stores/ui";
-import { useSession } from "../stores/session";
+import { setNormalization, useSession } from "../stores/session";
 import { AccountPanel } from "./AccountPanel";
 import { BackupSection } from "./BackupSection";
 import { AccentPicker, LayoutSection } from "./CustomizeSection";
@@ -78,6 +79,9 @@ function Dependency({ name, role, path, fix }: { name: string; role: string; pat
 
 export function SettingsDialog() {
   const session = useSession();
+  const [savingAudio, setSavingAudio] = useState(false);
+  const [audioError, setAudioError] = useState("");
+  const normalization = normalizationOf(session.preferences?.normalization ?? (!session.enabled ? localStorage.getItem("musike:normalization") : undefined));
   const canAdmin = !session.enabled || session.user?.role === "admin";
   const open = useUi((s) => s.settingsOpen);
   const setOpen = useUi((s) => s.setSettingsOpen);
@@ -156,10 +160,19 @@ export function SettingsDialog() {
           />
         </section>
 
+        <section className="flex flex-col gap-2">
+          <h3 className="text-xs font-medium text-fg-3">{t.offline.normalization}</h3>
+          <fieldset disabled={savingAudio || !!session.offline}>
+            <Segmented<Normalization> label={t.offline.normalization} value={normalization}
+              options={[["quiet", t.offline.quiet], ["standard", t.offline.standard], ["loud", t.offline.loud]]}
+              onChange={value => { setSavingAudio(true); setAudioError(""); void setNormalization(value).catch(() => setAudioError(t.offline.preferenceFailed)).finally(() => setSavingAudio(false)); }} />
+          </fieldset>
+          <p className="text-xs text-fg-2">{session.offline ? t.offline.normalizationOffline : t.offline.normalizationNote}</p>
+          {audioError && <p role="alert" className="text-xs text-danger">{audioError}</p>}
+        </section>
         <LayoutSection />
 
-        <BackupSection />
-          <AccountPanel />
+        {!session.offline && <><BackupSection /><AccountPanel /></>}
 
         {capabilities.engineSettings && canAdmin && (
         <section className="flex flex-col gap-3">

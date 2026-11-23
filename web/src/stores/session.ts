@@ -1,9 +1,10 @@
+import { normalizationOf, type Normalization } from "../lib/audioNormalizationCore";
 import { getT } from "../i18n";
 import { responseFailure, recordPlayback } from "../lib/playbackDiagnostics";
 import { create } from "zustand";
 
 export interface SessionUser { id: string; name: string; phone: string; role: "admin" | "user"; status: string; }
-export interface SessionInfo { enabled: boolean; user: SessionUser | null; google: boolean; admin?: boolean; offline?: boolean; }
+export interface SessionInfo { enabled: boolean; user: SessionUser | null; google: boolean; admin?: boolean; offline?: boolean; preferences?: { normalization: Normalization; revision?: number }; }
 export const useSession = create<SessionInfo>(() => ({ enabled: false, user: null, google: false }));
 export async function accountRequest<T>(url: string, body?: unknown, method?: string): Promise<T> {
   if (useSession.getState().offline && url !== "/api/auth/me") throw new Error(getT().offline.onlineRequired);
@@ -28,4 +29,19 @@ export async function accountRequest<T>(url: string, body?: unknown, method?: st
     throw error;
   }
   return data as T;
+}
+
+/** Use the existing CSRF/auth request boundary; never accept a client-supplied owner. */
+export async function setNormalization(value: Normalization) {
+  const session = useSession.getState(); const owner = session.user?.id;
+  const normalization = normalizationOf(value);
+  if (session.offline) throw new Error(getT().offline.onlineRequired);
+  if (!session.enabled) {
+    localStorage.setItem("musike:normalization", normalization);
+    useSession.setState({ preferences: { normalization } }); return;
+  }
+  const preferences = await accountRequest<{ normalization: Normalization; revision: number }>("/api/account/preferences", { normalization }, "PATCH");
+  if (useSession.getState().user?.id === owner && !useSession.getState().offline && (preferences.revision ?? 0) >= (useSession.getState().preferences?.revision ?? 0)) {
+    useSession.setState({ preferences });
+  }
 }

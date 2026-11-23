@@ -50,6 +50,14 @@ export class Accounts {
     const job = previous.catch(() => {}).then(work); this.locks.set(key, job);
     try { return await job; } finally { if (this.locks.get(key) === job) this.locks.delete(key); }
   }
+  async preferences(owner: string): Promise<{ normalization: "quiet" | "standard" | "loud"; revision: number }> {
+    const row = await this.db.get("SELECT normalization,revision FROM account_preferences WHERE user_id=?", [owner]);
+    return { normalization: row?.normalization ?? "standard", revision: row?.revision ?? 0 };
+  }
+  async setPreferences(owner: string, normalization: unknown) {
+    if (normalization !== "quiet" && normalization !== "standard" && normalization !== "loud") throw fail(400, "Invalid normalization level");
+    return this.db.get<{ normalization: "quiet" | "standard" | "loud"; revision: number }>("INSERT INTO account_preferences(user_id,normalization,revision) VALUES(?,?,1) ON CONFLICT(user_id) DO UPDATE SET normalization=excluded.normalization,revision=account_preferences.revision+1 RETURNING normalization,revision", [owner, normalization]);
+  }
   async setting<T>(key: string, fallback: T): Promise<T> {
     const row = await this.db.get("SELECT value FROM settings WHERE key=?", [key]);
     return row ? JSON.parse(row.value) as T : fallback;

@@ -1021,3 +1021,58 @@ Additional context:
 - Actionable diagnostic improvement for Codex: add a debug/error log line at the point where the stream proxy returns 502, including the upstream failure reason and videoId, or temporarily raise the log level for the stream/probe component. Combined with the pending client diagnostic log, this will separate "server could not reach the upstream stream source" from "re-extraction/probe path failed with an expired URL."
 
 **Interpretation:** The burst is a client-side skip sequence in which every freshly requested track failed to fetch at the origin while cached/preloaded tracks continued playing. It strongly supports the connectivity/dead-zone hypothesis for the *failed preloads*, but the 1 ms `stream.probe` rejections indicate that negative/expired URL state also participates (see BUG-001). It does not by itself explain the missing `ended` auto-advance; the origin only shows that new track fetches were failing during the skips.
+
+
+## 23 November 2026 — approved remaining-issues revision (Codex)
+
+The user approved building after reviewing the file/function impact and behavior questions. Baseline is `musike-main (8).zip`; the separately supplied 23 November report is preserved verbatim above, including its origin/Docker evidence. This section supersedes conflicting interpretations without rewriting historical reports. No deployment or live infrastructure change occurred.
+
+### BUG-007 / BUG-022 — source recovery updated; physical Samsung A07 acceptance OPEN
+
+Confirmed reproduction context: Samsung A07 installed PWA, current uploaded source, normal playlist, automatic transition, mainly mobile data. The supplied 200-event export covers 23 November 07:24:24–07:29:11 MYT. It contains 12 incomplete preloads for `eJGjFPeMSP4`, origin/probe 502 failures, hidden retries, and failures continuing after unlock. It contains no retained `player.ended`. Routine queue preparation occupies 157 entries, so missing lifecycle evidence cannot establish that the ended event never ran.
+
+The supplied origin evidence confirms application-generated 502 responses. Correction to the preceding interpretation: `stream.probe` intentionally reads an owner/trace/video-scoped recent error without contacting an upstream provider. Its 1 ms response is not evidence of a negative resolver cache or expired URLs. Origin upstream failures also do not by themselves demonstrate that the phone's mobile-data dead zone caused the origin's failure. The precise historical provider failure remains unknown.
+
+Implemented:
+
+- Keep the authorized audio element; observe actual ended media state before the output guard, reject duplicate/stale ended tasks, and check terminal media state on media progress/maintenance tasks without visibility gating. A frozen/killed page cannot execute these checks.
+- Keep Media Session play intent during error probing and the two bounded retries. For an automatic personal transition, after recoverable retries are exhausted, select the next complete downloaded body in queue order; skip unavailable entries, preserve repeat-all order, and pause with an explanation if none remains. Pause, skip, queue replacement, logout and output loss fence late work. Offline missing bodies can use the same downloaded-successor search. Jams never perform this independent queue substitution.
+- Prepare up to three complete upcoming network bodies, nearest first, one network reader, 16 MiB each / 48 MiB retained network-body ceiling; respect the server lookahead including zero. Preserve ready farther bodies on advancement, cancel stale windows, retain two-attempt/30-second backoff and complete-body validation. The active body is separate. Large existing downloads still play through the normal IndexedDB path; speculative window hydration is bounded to 16 MiB per body.
+- Classify source HTTP refusal, unexpected content, missing/empty bytes, first-byte timeout, DNS/reset/network and metadata/provider failures using allowlisted fields. Confirmed 403/410 URL rejection permits one fresh candidate pass within the original acquisition deadline. Do not repeatedly resolve 429/unavailable content. No provider text/URLs/headers enter the new logs.
+- Sample successful queue-poll events in the bounded browser export, always retaining errors; preload failures report safe categories instead of one `network_or_limit` label.
+
+Decision: no service-worker music scheduler, screen wake lock, silent keepalive, native wrapper or speculative tunnel change. A screen wake lock does not remain applicable after manual screen-off, and service-worker lifetime is event-driven; neither establishes continuous locked playback. The server yt-dlp wrapper is not an Android audio host. Its contents remain unchanged; archive-lost executable permission is restored.
+
+### BUG-027 — IMPLEMENTED IN SOURCE; audio/device acceptance pending
+
+Exactly Quiet / Standard / Loud, default Standard; no Off option. The choice belongs to the authenticated account, updates through an owner-scoped API, and reaches other connected devices through existing 15-second presence responses or the next login/reconnect. Increasing per-owner revisions prevent stale heartbeat responses from reverting a newer preference. Offline uses the last synced choice and cannot change the server setting. Auth-off remains a local preference and does not open SQLite.
+
+One reusable AudioContext routes the existing audio and video elements through an AudioWorklet. Streaming RMS measurement adjusts gain with a silence gate, bounded amplification and linked-channel sample-peak protection; user volume/mute is applied after normalization. This works independently of page animation timers and uses the same processing for streamed, downloaded and jam media. Targets are -23 / -18 / -14 dBFS RMS, with a -1 dBFS sample-peak ceiling; these are not claimed to be Spotify's proprietary processing or certified integrated LUFS/true-peak measurements. No whole-song decode, server transcoding or duplicate normalized media copies are added. Initialization failure preserves direct playback; processor failure bypasses processing while preserving user volume. Browser interruption/autoplay/background behavior requires real-device acceptance.
+
+### BUG-028 — IMPLEMENTED IN SOURCE; visual/PWA acceptance pending
+
+Offline routes reuse the actual Library, Collection, paginated TrackList, desktop rail, mobile tabs, player surfaces, settings and toasts. Owner-scoped opt-in metadata keeps Favorites, server history and all personal playlists visible with missing audio greyed out. An All downloaded audio collection preserves access to cached tracks outside the latest history/playlist metadata. Offline rows remain interactive and explain missing downloads; online Downloads-view taps queue a bounded unpinned download without changing playback. Explicit pinning remains the operation that protects complete/pending playlist membership from eviction.
+
+Library editing, favorite mutations, imports, social/admin views and video/device controls are absent from the offline experience. The account preference is displayed but cannot be changed offline. Storage controls retain existing explicit management behavior. Original eligibility/Web Lock, audio-only/64 MiB admission, budgets/pins, owner purge, known-auth-failure exclusion and stop-before-reconnect rules remain. Reconnect completions cannot restore output after unmount, logout or owner change. An additive IndexedDB v2 metadata store preserves existing bodies; metadata admission is capped at 8 MiB and retains the prior complete snapshot if a new one cannot fit. The explicit download queue is capped at 100 and is not consumed by a concurrently active playlist job.
+
+### Every documented item reviewed
+
+| Items | Current disposition |
+| --- | --- |
+| BUG-001 | Existing first-usable fallback retained; bounded refresh on confirmed rejected URLs added. Historical upstream token mechanism is not certified resolved. |
+| BUG-002 | Existing matching/progress/checkpoint implementation retained; actual failed-library/provider rerun remains pending. No Takeout parser was invented. |
+| BUG-003 | Existing accepted queue/cold-path fix retained; complete preparation regression coverage extended. |
+| BUG-004 / BUG-006 | Recovery and safe diagnostics improved; historical radio/edge/device causes remain unverified. |
+| BUG-005 | Wrapper content retained; executable bit restored; existing subprocess regressions pass. Operator timing remains separate. |
+| BUG-007 / BUG-022 | Source recovery changes above; real locked A07 automatic/mobile-data acceptance remains OPEN. |
+| BUG-008 | Existing web/PWA-only source retirement retained; actual Docker runtime acceptance remains pending. |
+| BUG-009 / BUG-014 | Existing Discord CA/stdout/ownership implementation retained; live revised SDK/profile acceptance remains pending. |
+| BUG-010 / BUG-011 / BUG-012 | Existing stdout/privacy, Malaysian identities and audit runbook retained; relevant regressions pass. |
+| BUG-013 / BUG-018 | Existing transfer acknowledgement, epoch fencing, stale takeover, SSE/JSON and guest-control protections retained; regressions pass. |
+| BUG-015 / BUG-016 / BUG-017 | Existing import/social/admin implementations retained; live provider/device/operator acceptance remains separate. |
+| BUG-019 / BUG-020 / BUG-021 / BUG-024 | Existing UI removal, scrolling, data-only commands and compact import behavior retained; regressions pass. |
+| BUG-023 | Existing offline guarantees retained; metadata navigation and explicit download handling extended. Physical quota/reopen/background acceptance remains pending. |
+| BUG-025 / BUG-026 | Existing source fixes retained; budget-backoff and jam-timeline regressions pass. No unrelated rewrite. |
+| BUG-027 / BUG-028 | Implemented in source as detailed above; actual audio/device and visual/PWA acceptance remain pending. |
+
+Verification: 165 tests pass, zero failed/skipped/cancelled; server/web TypeScript, production web/PWA and server bundle pass. Exact commands/environment and remaining acceptance are in TEST-RESULTS.md and ACCEPTANCE-CHECKLIST.md. Runtime dependencies/lockfile, CSS tokens, operator environment/compose, provider credentials and wrapper contents are unchanged. The only new server schema/API surface is account normalization preferences. No production deployment is claimed.

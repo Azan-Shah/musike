@@ -1,7 +1,9 @@
+import { useSession } from "../stores/session";
+import { useOffline } from "../stores/offline";
 import { OfflinePlaylistButton } from "../components/OfflineStorage";
 import { DotsThreeIcon, MagnifyingGlassIcon, PauseIcon, PencilSimpleIcon, PlayIcon, ShuffleIcon, TrashIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { Cover, type CoverKind } from "../components/Cover";
 import { NamePlaylistDialog } from "../components/Dialogs";
 import { IconButton, PlayDisc } from "../components/IconButton";
@@ -17,15 +19,22 @@ import { useLibrary } from "../stores/library";
 
 interface Props {
   kind: CoverKind;
+  downloaded?: boolean;
 }
 const EMPTY_TRACKS: Track[] = [];
 
 /** Playlist, Favorites and History share one layout. */
-export default function Collection({ kind }: Props) {
+export default function Collection({ kind, downloaded = false }: Props) {
   const { id } = useParams();
+  const offline = useSession(s => !!s.offline);
+  const [params] = useSearchParams(); const downloads = downloaded || offline || params.get("downloads") === "1";
+  const entries = useOffline(s => s.summary?.entries);
+  const available = useMemo(() => new Set(entries?.map(e => e.id)), [entries]);
   const navigate = useNavigate();
   const playlist = useLibrary((s) => kind === "playlist" ? s.playlists.find((p) => p.id === id) : undefined);
-  const tracks = useLibrary((s) => kind === "favorites" ? s.favorites : kind === "history" ? s.history : playlist?.tracks ?? EMPTY_TRACKS);
+  const collectionTracks = useLibrary((s) => kind === "favorites" ? s.favorites : kind === "history" ? s.history : playlist?.tracks ?? EMPTY_TRACKS);
+  const downloadedTracks = useMemo(() => entries?.map(entry => entry.track) ?? EMPTY_TRACKS, [entries]);
+  const tracks = downloaded ? downloadedTracks : collectionTracks;
   const libraryStatus = useLibrary((s) => s.status);
   const renamePlaylist = useLibrary((s) => s.renamePlaylist);
   const deletePlaylist = useLibrary((s) => s.deletePlaylist);
@@ -38,10 +47,12 @@ export default function Collection({ kind }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const t = useT();
 
-  const name = kind === "favorites" ? t.nav.favorites : kind === "history" ? t.nav.recentlyPlayed : playlist?.name ?? "";
+  const name = downloaded ? t.offline.allDownloaded : kind === "favorites" ? t.nav.favorites : kind === "history" ? t.nav.recentlyPlayed : playlist?.name ?? "";
   const label =
     kind === "playlist" ? t.collection.labelPlaylist : kind === "favorites" ? t.collection.labelFavorites : t.collection.labelHistory;
-  const trackIds = useMemo(() => new Set(tracks.map((track) => track.id)), [tracks]);
+  const playable = useMemo(() => downloads ? tracks.filter(track => available.has(track.id)) : tracks, [tracks, downloads, available]);
+  const trackIds = useMemo(() => new Set(playable.map((track) => track.id)), [playable]);
+  const start = (items = playable) => { if (downloads) { usePlayer.getState().setPreferVideo(false); usePlayer.getState().setAutoRadio(false); } playList(items, 0); };
   const total = useMemo(() => tracks.reduce((sum, track) => sum + (track.duration || 0), 0), [tracks]);
 
   if (kind === "playlist" && !playlist) {
@@ -64,7 +75,7 @@ export default function Collection({ kind }: Props) {
   }
 
   // The queue holds exactly these tracks, so this collection is the current playback context.
-  const isThisPlaying = tracks.length > 0 && queue.length === tracks.length && queue.every((t) => trackIds.has(t.id));
+  const isThisPlaying = playable.length > 0 && queue.length === playable.length && queue.every((t) => trackIds.has(t.id));
   const playing = isThisPlaying && (status === "playing" || status === "loading");
 
   return (
@@ -96,48 +107,48 @@ export default function Collection({ kind }: Props) {
         <PlayDisc
           label={playing ? t.common.pause : t.common.playX(name)}
           px={56}
-          disabled={!tracks.length}
-          onClick={() => (isThisPlaying ? toggle() : playList(tracks, 0))}
+          disabled={!playable.length}
+          onClick={() => (isThisPlaying ? toggle() : start())}
         >
           {playing ? <PauseIcon size={24} weight="fill" /> : <PlayIcon size={24} weight="fill" />}
         </PlayDisc>
         <IconButton
           label={t.collection.shuffle}
           size="lg"
-          disabled={!tracks.length}
+          disabled={!playable.length}
           onClick={() => {
-            const order = shuffled(tracks);
-            playList(order, 0);
+            const order = shuffled(playable);
+            start(order);
           }}
         >
           <ShuffleIcon size={24} />
         </IconButton>
-        {kind === "playlist" && (
+        {kind === "playlist" && !offline && (
           <IconButton label={t.collection.more} size="lg" onClick={() => setMoreOpen(true)}>
             <DotsThreeIcon size={26} weight="bold" />
           </IconButton>
         )}
       </div>
 
-      {playlist && <section className="px-4 pb-4 md:px-6"><OfflinePlaylistButton playlist={playlist} /></section>}
+      {playlist && !offline && <section className="px-4 pb-4 md:px-6"><OfflinePlaylistButton playlist={playlist} /></section>}
       <div className="px-2 md:px-3">
         {tracks.length > 0 ? (
-          <TrackList tracks={tracks} playlistId={playlist?.id} listKey={`${kind}:${id ?? ""}`} showAlbum />
+          <TrackList downloads={downloads} tracks={tracks} playlistId={playlist?.id} listKey={downloaded ? "downloaded-audio" : `${kind}:${id ?? ""}`} showAlbum />
         ) : (
           <EmptyState
             icon={<MagnifyingGlassIcon size={28} />}
-            title={kind === "history" ? t.collection.emptyHistory : t.collection.empty}
+            title={downloaded ? t.offline.empty : kind === "history" ? t.collection.emptyHistory : t.collection.empty}
             body={
-              kind === "favorites"
+              downloaded ? t.offline.notice : kind === "favorites"
                 ? t.collection.emptyFavoritesBody
                 : kind === "history"
                   ? t.collection.emptyHistoryBody
                   : t.collection.emptyPlaylistBody
             }
-            action={
+            action={!offline ?
               <Link to={paths.search} className="mt-2 h-11 rounded-full bg-accent px-6 text-sm leading-[44px] font-semibold text-accent-ink">
                 {t.common.searchMusic}
-              </Link>
+              </Link> : undefined
             }
           />
         )}

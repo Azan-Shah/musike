@@ -8,6 +8,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const t = useT(); const f = t.features;
   const info = useSession();
   const [ready, setReady] = useState(false);
+  useEffect(() => { if (info.user && !info.offline) void rememberOfflineAccount(info.user.id, info.user.name, info.preferences?.normalization); }, [info.user?.id, info.user?.name, info.preferences?.normalization, info.offline]);
   const [phone, setPhone] = useState(""); const [invite, setInvite] = useState(""); const [code, setCode] = useState("");
   const [remember, setRemember] = useState(false); const [challenge, setChallenge] = useState("");
   const [cooldown, setCooldown] = useState(0); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
@@ -16,11 +17,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (import.meta.env.MODE === "native") { setReady(true); return; }
     const pendingLogout = localStorage.getItem("musike:logout-pending");
     const prepare = pendingLogout ? accountRequest("/api/auth/logout", {}).then(() => localStorage.removeItem("musike:logout-pending")) : Promise.resolve();
-    prepare.then(() => accountRequest<SessionInfo>("/api/auth/me")).then((data) => { if (alive) { if (data.enabled && data.user) sessionStorage.setItem("musike:user", data.user.id); else { sessionStorage.removeItem("musike:user"); forgetOfflineAccount(); } useSession.setState({ ...data, offline: false }); if (data.user) void rememberOfflineAccount(data.user.id, data.user.name); setReady(true); } },
+    prepare.then(() => accountRequest<SessionInfo>("/api/auth/me")).then((data) => { if (alive) { if (data.enabled && data.user) sessionStorage.setItem("musike:user", data.user.id); else { sessionStorage.removeItem("musike:user"); forgetOfflineAccount(); } useSession.setState({ ...data, offline: false }); if (data.user) void rememberOfflineAccount(data.user.id, data.user.name, data.preferences?.normalization); setReady(true); } },
       async (error) => { if (!alive) return;
         const cached = error.network && !pendingLogout ? await cachedOfflineAccount() : null;
         if (!alive) return;
-        if (cached) { sessionStorage.setItem("musike:user", cached.id); useSession.setState({ enabled: true, user: cached, google: false, offline: true }); }
+        if (cached) { sessionStorage.setItem("musike:user", cached.id); useSession.setState({ enabled: true, user: cached, google: false, offline: true, preferences: { normalization: cached.normalization } }); }
         else { setError(f.connectionFailed); useSession.setState({ enabled: true, user: null, offline: false }); }
         setReady(true);
       });
@@ -34,7 +35,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!info.enabled || !info.user || info.offline) return;
     const clientId = sessionStorage.getItem("musike:client") ?? crypto.randomUUID(); sessionStorage.setItem("musike:client", clientId);
-    const ping = () => accountRequest<{ user: SessionInfo["user"] }>("/api/presence", { clientId }).then((r) => { if (r.user) useSession.setState({ user: r.user }); }).catch(() => {});
+    const ping = () => accountRequest<{ user: SessionInfo["user"]; preferences?: SessionInfo["preferences"] }>("/api/presence", { clientId }).then((r) => { if (r.user && useSession.getState().user?.id === r.user.id && !useSession.getState().offline) { const preferences = (r.preferences?.revision ?? 0) >= (useSession.getState().preferences?.revision ?? 0) ? r.preferences : useSession.getState().preferences;
+      useSession.setState({ user: r.user, preferences }); void rememberOfflineAccount(r.user.id, r.user.name, preferences?.normalization); } }).catch(() => {});
     void ping(); const timer = setInterval(ping, 15_000); return () => clearInterval(timer);
   }, [info.enabled, info.user?.id, info.offline]);
   useEffect(() => {

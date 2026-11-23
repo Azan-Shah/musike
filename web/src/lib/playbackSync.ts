@@ -19,6 +19,7 @@ let jamControl: ((action: string, args: unknown[]) => unknown) | null = null;
 export const setJamControl = (control: typeof jamControl) => { jamControl = control; };
 let alignJam: ((snapshot: SharedPlayback) => void) | null = null;
 export const alignJamPlayback = (snapshot: SharedPlayback) => alignJam?.(snapshot);
+export const playbackInJam = () => jamControl !== null;
 export const playbackCanOutput = () => allowed;
 export const setOfflineOutput = (on: boolean) => { allowed = on; };
 let claim: ((takeover?: boolean) => Promise<void>) | null = null;

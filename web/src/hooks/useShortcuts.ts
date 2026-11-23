@@ -1,3 +1,4 @@
+import { useSession } from "../stores/session";
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
 import { paths } from "../lib/routes";
@@ -16,6 +17,7 @@ export function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+      if (useSession.getState().offline && /^[lLvV/]$/.test(e.key)) return;
       if (useUi.getState().menu || useUi.getState().addToPlaylist) return;
       // On Android TV the arrow keys belong to focus navigation, not to volume/seek.
       if (isTvMode() && /^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight| )$/.test(e.key)) return;
