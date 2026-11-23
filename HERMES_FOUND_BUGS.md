@@ -951,3 +951,41 @@ Both the transition preloader and persistent downloader reject bodies shorter th
 | BUG-025 / BUG-026 | Resolved in source with targeted regression coverage; demo acceptance remains required |
 
 Validation: 149 tests pass, zero failed/skipped/cancelled; server/web typechecks, production web/PWA build and server bundle pass. Original application suite: 138/138 after restoring the archive-lost wrapper executable bit. Eleven new tests plus extended existing assertions cover the new repairs. Runtime dependencies, lockfile, CSS, server endpoints, DOM hooks, SQLite/browser schemas and operator configuration are unchanged. ARCHITECTURE.md is therefore unchanged under the user's documentation constraint. No deployment occurred.
+
+## BUG-027 — NEW (Codex handoff): audio normalization setting, Spotify-style (reported 2026-11-23)
+
+**Operator report:** audio loudness varies wildly between YouTube tracks and playlists; quiet songs force cranking the volume, loud ones blast. Wants a normalization setting in the style of Spotify: selectable target level — Quiet / Standard / Loud (plus Off).
+
+**Codex handoff context (verified against main @ 6f41eee):**
+- Single stable audio element: `web/src/lib/audio.ts` `createAudio()` (`new Audio()`, preload auto), instantiated once at `web/src/player/player.ts:81`. `media.volume` is applied from persisted state at player.ts:239; `setVolume()` at player.ts:658 drives both audio and video elements. Do NOT change volume slider semantics — normalization must compose with existing volume.
+- Settings UI pattern: `web/src/components/SettingsDialog.tsx` uses a reusable `radiogroup` component (see theme/language sections, lines ~133-157). Add a normalization section the same way; persist through the player store's saved-state pattern (player.ts:520 `saved.volume ?? 0.9`).
+- Implementation options: (a) Web Audio API — route the media element through `MediaElementAudioSourceNode` + `GainNode`, with a stored loudness target. Watch CORS: cross-origin streams without headers will output silence once routed through Web Audio; offline Blob URLs are safe. (b) Server-side: yt-dlp already extracts loudness metadata for YouTube audio; if the server can attach a loudness/mean-volume value to the stream response, the client can set a per-track pre-gain without a full Web Audio graph. Codex picks one; document the tradeoff.
+- i18n: add keys to `web/src/i18n/en.ts` only; `pt.ts` is a partial catalog and not maintained 1:1.
+- Regression: typecheck, production web/PWA build, existing test suite must pass unchanged.
+
+## BUG-028 — NEW (Codex handoff): offline UI revamp — mirror the online library, grey out non-cached tracks (reported 2026-11-23)
+
+**Operator report:** the offline experience UI is its own bare utility page and looks bad. Wants the online library UI copied essentially 1:1 for offline, with tracks that are not downloaded/cached greyed out, and a stronger focus on revamping offline support overall.
+
+**Codex handoff context (verified against main @ 6f41eee):**
+- Current offline UI: `web/src/views/OfflineLibrary.tsx` (plain paginated list + `OfflineExperience` wrapper handling tab lock / output grant / reconnect) and `web/src/components/OfflineStorage.tsx` (budget select, enable/disable, `OfflinePlaylistButton` pin/unpin with pending/ready states).
+- Data already available to render greyed-out states: `offlineSummary(owner)` in `web/src/lib/offlineStore.ts` returns `entries` (id, track, bytes, played) and `pins` with `pending` playlists. Compare library track ids against the entries id set for the dimmed/greyed presentation.
+- Online views to mirror: `web/src/views/Library.tsx`, `TrackList.tsx`, `Rail.tsx`, `AlbumTiles.tsx`. Keep the same components if feasible so online/offline never diverge visually.
+- Greyed-out tracks must stay interactive: tapping a non-cached track while online should queue/mark it for download; while offline, show a clear "not downloaded" toast (`player.cantPlay` pattern) instead of silently doing nothing.
+- Hard constraints from BUG-023 that MUST survive the revamp: music-only caching (never video), 64 MiB `MAX_AUDIO` admission cap, budget eviction with pin protection, exclusive offline tab ownership via `navigator.locks`, output eligibility check, stop-before-reconnect, logout purge. Offline jams/transfers remain out of scope.
+- Regression: typecheck, production web/PWA build, existing test suite pass; real device/storage acceptance remains a separate operator check.
+
+## BUG-007 / BUG-022 — dated amendment (2026-11-23): locked-screen advance partially improved; auto-advance still fails; diagnostic log expected
+
+**Operator report (third party, via user; diagnostic log downloaded and will be submitted — treat evidence as pending until it arrives):**
+
+- Manual next via car media controls (Bluetooth/steering wheel) while the screen is locked now works — the app survives, controls respond. Confirmed improvement over the prior state.
+- NEW defect: natural end-of-track auto-advance does NOT fire while locked. The song finishes and goes silent; the operator must press next before the track ends to keep music playing.
+- Pattern: after roughly 4 manual skips the behavior repeats/breaks down again.
+- Possible contributor: data loss — the car moves through areas with no data connection, so next-track preload may be failing or hanging in dead zones.
+
+**Analysis leads for Codex (NOT verified — starting points):**
+- `onEnded()` at `web/src/player/player.ts:373` is gated by `playbackCanOutput()`, and the `ended` listener is attached at player.ts:489. On Android with the screen locked, Chrome may throttle or freeze the tab (battery saver / PWA lifecycle), so the `ended` event may never fire — while manual `next()` via Media Session action handlers (`web/src/lib/mediaSession.ts:18`) bypasses the ended path entirely. This would explain manual-next working while auto-advance does not. Check whether `playbackCanOutput()` or any visibility gating blocks the ended path when the page is hidden.
+- The 4-skip pattern is consistent with the preload design: only ONE next complete body is preloaded (`completePreload.retain(nearest?.id)` in `warmQueue()`), 16 MiB / 25 s deadline / two attempts then 30 s backoff. Repeated manual skips through a dead zone outrun the preload; offline hydration only covers already-downloaded ids. Once the queue is ahead of the preloaded body, silence at boundaries.
+- Re-evaluate the standing BUG-022 constraint against a service-worker audio scheduler / Wake Lock during playback given this new evidence; the prior revision explicitly avoided one. Document the decision either way.
+- When the diagnostic log arrives, reconcile it against `playbackDiagnostics` events (`player.ended`, `prepare.error`, `radio.error`) before locking conclusions.
