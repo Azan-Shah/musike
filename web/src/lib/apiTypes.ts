@@ -85,6 +85,7 @@ export interface MusikeApi {
   addFavorite(t: Track): Promise<{ favorites: Track[] }>;
   addFavorites(tracks: Track[]): Promise<{ favorites: Track[] }>;
   removeFavorite(id: string): Promise<{ favorites: Track[] }>;
+  deleteTrack(id: string): Promise<Library>;
   pushHistory(t: Track): Promise<{ history: Track[] }>;
   createPlaylist(name: string, tracks?: Track[]): Promise<Playlist>;
   renamePlaylist(id: string, name: string): Promise<Playlist>;

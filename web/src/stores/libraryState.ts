@@ -13,6 +13,7 @@ interface LibraryState extends Library {
   recordPlay: (t: Track) => void;
   createPlaylist: (name: string, tracks?: Track[]) => Promise<Playlist | null>;
   renamePlaylist: (id: string, name: string) => Promise<void>;
+  deleteTrack: (id: string) => Promise<void>;
   deletePlaylist: (id: string) => Promise<void>;
   addToPlaylist: (id: string, t: Track | Track[]) => Promise<void>;
   removeFromPlaylist: (id: string, trackId: string) => Promise<void>;
@@ -82,6 +83,11 @@ export function createLibraryStore(api: MusikeApi, messages: () => Messages, toa
           await writes.run((data) => ({ ...data, playlists: data.playlists.map((p) => p.id === id ? { ...p, name } : p) }),
             () => api.renamePlaylist(id, name), (data, p) => ({ ...data, playlists: replacePlaylist(data.playlists, p) }));
         } catch (e) { report(e); }
+      },
+      deleteTrack: async (id) => {
+        const remove = (data: Library): Library => ({ favorites: data.favorites.filter(t => t.id !== id), history: data.history.filter(t => t.id !== id),
+          playlists: data.playlists.map(p => ({ ...p, tracks: p.tracks.filter(t => t.id !== id) })) });
+        await writes.run(remove, () => api.deleteTrack(id), (_data, result) => result);
       },
       deletePlaylist: async (id) => {
         try {

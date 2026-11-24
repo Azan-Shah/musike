@@ -29,11 +29,11 @@ export async function registerAccounts(app: FastifyInstance, options: AccountOpt
   app.get("/api/auth/me", async (req) => ({ enabled, user: req.musikeUser, google: !!(accounts && process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && (process.env.GOOGLE_REDIRECT_URI || accounts.origin)),
     admin: req.musikeUser?.role === "admin", preferences: accounts && req.musikeUser ? await accounts.preferences(req.musikeUser.id) : undefined }));
   app.patch("/api/account/preferences", { schema: { body: {
-    type: "object", required: ["normalization"], additionalProperties: false,
-    properties: { normalization: { type: "string", enum: ["quiet", "standard", "loud"] } },
+    type: "object", minProperties: 1, additionalProperties: false,
+    properties: { normalization: { type: "string", enum: ["quiet", "standard", "loud"] }, theme: { type: "string", enum: ["dark", "light"] }, language: { type: "string", enum: ["en", "pt-BR"] }, appearance: { type: "object", additionalProperties: false, properties: { ...Object.fromEntries(["sidebarPlaylists", "compactSidebar", "albumColumn", "texture", "homeShortcuts", "homeRecent", "homeFavorites"].map(k => [k, { type: "boolean" }])), accent: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" } } } },
   } } }, async (req) => {
     if (!accounts || !req.musikeUser) throw fail(401, "Login required");
-    return accounts.setPreferences(req.musikeUser.id, (req.body as { normalization: string }).normalization);
+    return accounts.setPreferences(req.musikeUser.id, req.body);
   });
   app.post("/api/auth/request", { schema: { body: {
     type: "object", required: ["phone"], additionalProperties: false,

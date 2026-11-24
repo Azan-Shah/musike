@@ -343,6 +343,7 @@ export async function createApp(options: AccountOptions & { trustProxy?: string;
 
   app.delete("/api/favorites/:id", async (req) => ({ favorites: await userLibrary(req).removeFavorite(videoId(req.params)) }));
 
+  app.delete("/api/library/tracks/:id", async req => userLibrary(req).deleteTrack(videoId(req.params)));
   app.post("/api/history", async (req) => ({ history: await userLibrary(req).pushHistory(library.sanitizeTrack(req.body)) }));
 
   app.post("/api/playlists", async (req) => {

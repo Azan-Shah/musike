@@ -1,3 +1,4 @@
+import { recordPlayback } from "./playbackDiagnostics";
 import { playbackCommand } from "./playbackCommands";
 import { rememberOutput } from "./offlineDownloads";
 import { create } from "zustand";
@@ -33,14 +34,13 @@ const actions = ["playList", "playTrack", "playNext", "addToQueue", "removeAt", 
 // live document, so two tabs can never receive the same output grant accidentally.
 const documentClientId = crypto.randomUUID();
 /** Injected into the real player once AuthGate has established the owner. No server imports. */
-export function startPlaybackSync(store: Store) {
+function startCoordinator(store: Store, clientId: string = documentClientId) {
   let stopped = false; let applying = false; let view: View | null = null; let seq = 0; let lastEpoch = -1;
   let controller: AbortController | null = null; let reconnect: ReturnType<typeof setTimeout> | null = null;
   let chain = Promise.resolve(); let lastCommand = ""; let transferAck = ""; let publishing = false; let dirty = false; let sentAt = 0;
   let lastPacketAt = Date.now();
-  let transferAckAt = 0;
+  let transferAckAt = 0; let claimStarted = 0;
   const originals = new Map(actions.map((name) => [name, (store.getState() as unknown as Player)[name] as (...args: unknown[]) => unknown]));
-  const clientId = documentClientId;
   const snapshot = (): SharedPlayback => {
     const s = store.getState(); const start = Math.max(0, s.index - 100); const queue = s.queue.slice(start, start + 500);
     const ids = new Set(queue.map((t) => t.id));
@@ -62,6 +62,7 @@ export function startPlaybackSync(store: Store) {
     void rememberOutput(allowed && !next.transfer, next.active, next.deviceId, !!next.transfer);
     if (lastEpoch !== next.epoch) { seq = 0; lastEpoch = next.epoch; lastCommand = ""; }
     applying = true;
+    if (!wasAllowed && allowed && claimStarted) { recordPlayback("sync.transfer_granted", { ms: Date.now() - claimStarted }); claimStarted = 0; }
     if (wasAllowed && !allowed) store.getState().suspendOutput();
     if (!allowed || !wasAllowed) store.setState({ ...next.snapshot, statusText: null, buffered: 0 });
     applying = false;
@@ -77,7 +78,8 @@ export function startPlaybackSync(store: Store) {
     }
     const command = next.command;
     if (allowed && command && command.id !== lastCommand) {
-      lastCommand = command.id;
+      lastCommand = command.id; const receivedAt = Date.now();
+      recordPlayback("sync.command_received", { reason: command.action });
       void perform(async () => {
         if (!allowed || view?.transfer || view?.command?.id !== command.id) return;
         applying = true;
@@ -85,6 +87,7 @@ export function startPlaybackSync(store: Store) {
           if (command.action === "resume") store.getState().resumeOutput({ ...next.snapshot, status: "playing" });
           else if (command.action === "jam") store.getState().resumeOutput(command.args[0] as SharedPlayback);
           else await originals.get(command.action)?.(...command.args);
+          if (command.action === "seek" || command.action === "jam") recordPlayback("sync.command_applied", { reason: command.action, ms: Date.now() - receivedAt });
         } finally { applying = false; }
         await publishNow(command.id);
       });
@@ -109,9 +112,14 @@ export function startPlaybackSync(store: Store) {
   for (const [name, original] of originals) patches[name] = (...args: unknown[]) => {
     if (applying) return original(...args);
     if (stopped) return;
+    if (name === "seek") recordPlayback("sync.seek_requested", { position: Number(args[0]) });
     if (jamControl) { try { const command = playbackCommand(name, args); return jamControl(command.action, command.args); } catch (error) { fail(error); return; } }
     if (!view) { toast(getT().features.syncConnecting, "error"); return; }
-    if (allowed && !view.transfer) return original(...args);
+    if (allowed && !view.transfer) {
+      const result = original(...args);
+      if (name === "seek") { recordPlayback("sync.seek_sent", { position: Number(args[0]) }); dirty = false; void publish(); }
+      return result;
+    }
     try { const command = playbackCommand(name, args); return perform(async () => receive(await post({ type: "command", ...command }))); }
     catch (error) { fail(error); }
   };
@@ -142,7 +150,7 @@ export function startPlaybackSync(store: Store) {
       applying = true; try { originals.get("seek")?.(target.position); } finally { applying = false; }
     }
   };
-  claim = (takeover = false) => perform(async () => { if (view) receive(await post({ type: "claim", takeover })); });
+  claim = (takeover = false) => perform(async () => { claimStarted = Date.now(); recordPlayback("sync.transfer_requested", { reason: takeover ? "stale" : "normal" }); if (view) receive(await post({ type: "claim", takeover })); });
   release = () => perform(async () => {
     if (!view || !allowed) return;
     applying = true; store.getState().suspendOutput(); applying = false;
@@ -152,9 +160,14 @@ export function startPlaybackSync(store: Store) {
     if (stopped) return;
     reconnect = null;
     try {
-      const registered = await accountRequest<View>("/api/playback/devices", { clientId, name: /Android|iPhone|iPad/.test(navigator.userAgent) ? getT().features.phoneDevice : getT().features.browserDevice });
+      const registered = await accountRequest<View>("/api/playback/devices", { clientId, name: deviceName(), instanceId: documentClientId });
       if (stopped) return;
       receive(registered);
+      try {
+        const previous = sessionStorage.getItem(`musike:resume-output:${clientId}`);
+        sessionStorage.removeItem(`musike:resume-output:${clientId}`);
+        if (previous === "yes" && !registered.active) receive(await post({ type: "claim" }));
+      } catch { /* Storage is optional; never claim a different active output. */ }
       controller = new AbortController();
       const response = await fetch(`/api/playback/updates?deviceId=${encodeURIComponent(registered.deviceId)}`, { credentials: "same-origin", redirect: "manual", signal: controller.signal });
       if (!response.ok || !response.headers.get("content-type")?.includes("text/event-stream")) throw new Error(getT().features.syncFailure);
@@ -190,6 +203,7 @@ export function startPlaybackSync(store: Store) {
   addEventListener("online", resume);
   const pagehide = () => {
     if (!view || !allowed) return;
+    try { sessionStorage.setItem(`musike:resume-output:${clientId}`, "yes"); } catch {}
     applying = true; store.getState().suspendOutput(); applying = false;
     void fetch("/api/playback/sync", { method: "POST", credentials: "same-origin", keepalive: true, headers: { "content-type": "application/json", "x-musike-request": "1" },
       body: JSON.stringify({ deviceId: view.deviceId, type: "snapshot", epoch: view.epoch, seq: ++seq, snapshot: { position: store.getState().position }, release: true }) }).catch(() => {});
@@ -197,8 +211,95 @@ export function startPlaybackSync(store: Store) {
   addEventListener("pagehide", pagehide);
   void connect();
   return () => {
+    pagehide();
     stopped = true; alignJam = null; jamControl = null; claim = null; release = null; clearInterval(timer); if (reconnect) clearTimeout(reconnect); controller?.abort(); unsubscribe(); removeEventListener("online", resume); removeEventListener("pagehide", pagehide);
     applying = true; store.getState().suspendOutput(); store.setState(Object.fromEntries(originals)); allowed = true;
     usePlaybackDevices.setState({ enabled: false, connected: false, view: null, error: "" });
   };
+}
+
+/** Browser data is best effort; no invented phone model or operator-editable alias. */
+export function deviceName() {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Browser";
+  const os = /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Windows/.test(ua) ? "Windows" : /Macintosh/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : "Web";
+  const model = /Android[^;)]*;\s*([^;)]+?)(?:\s+Build\/[^;)]+)?\)/.exec(ua)?.[1]?.trim();
+  return model && model !== "K" && !/^(?:wv|Mobile)$/i.test(model) ? `${model} ${browser} ${os}`.slice(0, 40) : `${browser} ${os}`;
+}
+
+/** One coordinator/output per account + browser installation. Other tabs mirror via bounded messages. */
+export function startPlaybackSync(store: Store) {
+  let owner: string | null = null; let installation = "";
+  try {
+    owner = sessionStorage.getItem("musike:user");
+    if (owner && navigator.locks && typeof BroadcastChannel !== "undefined") {
+      const key = `musike:device:${owner}`;
+      installation = localStorage.getItem(key) ?? "pending";
+    }
+  } catch { /* Without durable storage/locks retain independent fenced document identities. */ }
+  if (!installation) return startCoordinator(store);
+  const channel = new BroadcastChannel(`musike:device:${owner}`);
+  const originals = new Map(actions.map(name => [name, store.getState()[name as keyof ReturnType<Store["getState"]>]]));
+  let stopped = false; let leader = false; let dispose: (() => void) | undefined;
+  let releaseLock: (() => void) | undefined; const controller = new AbortController();
+  allowed = false; store.getState().suspendOutput();
+  const send = (data: unknown) => { if (!stopped) channel.postMessage(data); };
+  const mirror = Object.fromEntries(actions.map(name => [name, (...args: unknown[]) => {
+    try { send({ type: "command", ...playbackCommand(name, args) }); } catch {}
+  }]));
+  store.setState(mirror);
+  claim = (takeover = false) => { send({ type: "claim", takeover }); return Promise.resolve(); };
+  release = () => { send({ type: "release" }); return Promise.resolve(); };
+  const broadcast = () => {
+    const s = store.getState();
+    send({ type: "state", devices: usePlaybackDevices.getState(), snapshot: { queue: s.queue, original: s.original, index: s.index,
+      position: s.position, duration: s.duration, status: s.status, shuffle: s.shuffle, repeat: s.repeat, autoRadio: s.autoRadio } });
+  };
+  channel.onmessage = event => {
+    if (stopped) return;
+    const data = event.data;
+    if (!data || typeof data !== "object") return;
+    if (leader) {
+      if (data.type === "hello") broadcast();
+      if (data.type === "deleted" && typeof data.id === "string" && /^[\w-]{11}$/.test(data.id)) dispatchEvent(new CustomEvent("musike:track-deleted", { detail: data.id }));
+      if (data.type === "claim") void claimPlayback(data.takeover === true);
+      if (data.type === "release") void releasePlayback();
+      if (data.type === "command") {
+        try { const c = playbackCommand(data.action, data.args); (store.getState() as unknown as Player)[c.action] &&
+          (store.getState() as unknown as Record<string, (...args: unknown[]) => unknown>)[c.action]?.(...c.args); } catch {}
+      }
+    } else if (data.type === "state") {
+      allowed = false; store.setState({ ...data.snapshot, buffered: 0, statusText: null });
+      usePlaybackDevices.setState(data.devices);
+    }
+  };
+  const deleted = (event: Event) => { if (!leader) send({ type: "deleted", id: (event as CustomEvent<string>).detail }); };
+  addEventListener("musike:track-deleted", deleted);
+  send({ type: "hello" });
+  void navigator.locks.request(`musike-device:${owner}`, { signal: controller.signal }, async () => {
+    if (stopped) return;
+    leader = true; store.setState(Object.fromEntries(originals));
+    const key = `musike:device:${owner}`;
+    try { installation = localStorage.getItem(key) ?? crypto.randomUUID(); localStorage.setItem(key, installation); }
+    catch { installation = documentClientId; }
+    dispose = startCoordinator(store, installation);
+    const unsubscribe = usePlaybackDevices.subscribe(broadcast);
+    let lastSent = 0;
+    const playerSubscription = store.subscribe((s, old) => {
+      if (s.queue !== old.queue || s.index !== old.index || s.status !== old.status || Math.abs(s.position - old.position) > 1.2 || Date.now() - lastSent >= 1000) { lastSent = Date.now(); broadcast(); }
+    });
+    const timer = setInterval(broadcast, 1000);
+    await new Promise<void>(resolve => { releaseLock = resolve; });
+    clearInterval(timer); playerSubscription(); unsubscribe(); dispose?.(); dispose = undefined; leader = false;
+  }).catch(() => {});
+  const stop = () => {
+    if (stopped) return; stopped = true;
+    if (leader) { dispose?.(); dispose = undefined; }
+    controller.abort(); releaseLock?.(); channel.close();
+    store.setState(Object.fromEntries(originals)); allowed = false;
+    removeEventListener("musike:track-deleted", deleted);
+    removeEventListener("pagehide", stop);
+  };
+  addEventListener("pagehide", stop);
+  return stop;
 }

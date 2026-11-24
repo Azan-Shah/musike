@@ -4,7 +4,7 @@ import { responseFailure, recordPlayback } from "../lib/playbackDiagnostics";
 import { create } from "zustand";
 
 export interface SessionUser { id: string; name: string; phone: string; role: "admin" | "user"; status: string; }
-export interface SessionInfo { enabled: boolean; user: SessionUser | null; google: boolean; admin?: boolean; offline?: boolean; preferences?: { normalization: Normalization; revision?: number }; }
+export interface SessionInfo { enabled: boolean; user: SessionUser | null; google: boolean; admin?: boolean; offline?: boolean; preferences?: { normalization: Normalization; revision?: number; theme?: "dark" | "light"; language?: "en" | "pt-BR"; appearance?: Partial<import("./appearance").Appearance> }; }
 export const useSession = create<SessionInfo>(() => ({ enabled: false, user: null, google: false }));
 export async function accountRequest<T>(url: string, body?: unknown, method?: string): Promise<T> {
   if (useSession.getState().offline && url !== "/api/auth/me") throw new Error(getT().offline.onlineRequired);

@@ -549,3 +549,49 @@ Offline entry uses this metadata only after the existing authenticated-offline e
 Existing `/library`, `/favorites`, `/history`, `/playlist/:id` and `/offline` paths remain. `/offline?view=tracks` shows All downloaded audio through the same Collection/TrackList; `?downloads=1` on online collection links enables the downloaded-only playback/download interaction. Offline unsupported routes redirect to Library. Reuse the existing `data-route-ready` hook; no new DOM ID, root attribute, CSS variable or inline styling system is introduced.
 
 Rollback note: older browser code that explicitly opens IndexedDB version 1 cannot open an already-upgraded version 2 database. Preserve data and use a version-2-compatible rollback build or restore this release; do not clear downloaded audio to resolve a version mismatch. The SQLite addition is additive, but normal consistent data/secret backups remain required.
+
+
+## 10. Account installation identity, library deletion and shared preferences — 24 November 2026
+
+This section supersedes conflicting per-document identity and device-local appearance descriptions above. It extends the existing Fastify/React/worker architecture; no runtime dependency, CSS token, root data attribute, DOM ID or operator configuration changes.
+
+### Changed endpoint and schema contracts
+
+| Contract | Current behavior |
+| --- | --- |
+| `POST /api/playback/devices` | Adds optional `instanceId` (8–80 word/hyphen characters). The stable `clientId` identifies an account/browser installation under the browser lock. The live document instance rotates the epoch/sequence before resuming that installation; another active installation retains its grant. Existing clients without the optional field remain supported. |
+| `DELETE /api/library/tracks/:id` | Validates the existing 11-character video ID; same auth/status/CSRF/origin boundary; owner from session, or existing shared JSON library in auth-off mode. Removes personal favourites/history/all playlist memberships and returns the full updated `Library`. No arbitrary owner input. Does not delete another user's copies or the instance-wide public-media cache. |
+| `PATCH /api/account/preferences` | Accepts any nonempty subset of `normalization`, `theme:dark|light`, `language:en|pt-BR`, and `appearance`. Appearance permits hex `accent` and booleans `sidebarPlaylists`, `compactSidebar`, `albumColumn`, `texture`, `homeShortcuts`, `homeRecent`, `homeFavorites`. Field patches merge under the owner lock; returns complete saved fields, normalization and increasing revision. Existing normalization-only callers remain supported. |
+| `GET /api/auth/me`, `POST /api/presence` | Existing preferences object adds optional saved theme/language/appearance fields. Normally propagates in 15 seconds or next reconnect/login; browser throttling can delay a heartbeat. |
+| `GET /api/google/status` | Existing report progress adds optional `active:{sourceId,title,status:resolving}` and `waiting:[{sourceId,title,status:queued}]`, at most 100 queued previews. Completed-item cursor and 100-row deltas remain unchanged. |
+| `GET /api/playlist-imports/:id` | Existing bounded entries add optional safe `reason`; an in-flight entry may have status `resolving`. Permanently skipped entries keep the overall result partial. Existing retry resets failed/resolving checkpoints. |
+
+Worker migration `account-appearance-v1` consistently backs up populated databases with mode 0600 before transactional DDL and marker commit. Idempotent reopen preserves normalization and revisions. Existing owner PK/FK supplies indexed access and cascade; no new index is needed for the JSON preference payload.
+
+```sql
+ALTER TABLE account_preferences ADD COLUMN json TEXT NOT NULL DEFAULT '{}';
+INSERT INTO migrations(key,value) VALUES('account-appearance-v1','1');
+```
+
+The JSON column stores only optional validated theme/language/appearance fields. Normalization and revision retain their existing columns. SQL remains parameterized asynchronous RPC inside `db.ts`'s worker. Account queues/output, device volume/mute, offline budget/audio and TV mode are not included in this preference API.
+
+### Browser identity, files and wiring
+
+| Exact module/functions | Boundary |
+| --- | --- |
+| `web/src/lib/playbackSync.ts` — `startPlaybackSync`, `startCoordinator`, `deviceName`, `receive`, `publishNow` | Persist identity at `musike:device:<owner>`; exclusive Web Lock `musike-device:<owner>` elects the installation coordinator. BroadcastChannel `musike:device:<owner>` mirrors state/forwards encoded actions among same-origin tabs. Only the coordinator may output; mirrors do not inherit allowed output from the displayed device ID. Unsupported storage/locks/channel retains the old document-identity fallback. |
+| `server/src/playbackSync.ts` — `register`, `subscribe`, `reconcile`, `act` | Stable owner-keyed registry; replacement instance epoch fencing; one output/account. Closing the final SSE listener marks its device stale and immediately notifies peers without moving the playback timeline. Half-open connections still use 45-second inbound freshness; stale replacement is explicit; transfer expiry ten seconds. |
+| `web/src/lib/jams.ts` — `playJamHere` | Waits for grant changes through the existing device store subscription, capped at 12 seconds, rather than sampling every 300 ms. Canonical jam push remains through `Jams.publish`/`PlaybackSync.applyJam`; 1/5/10-second reconciliation remains. |
+| `web/src/player/player.ts` — `load`, `onError`, `downloadedFallback`, `restorePlayback` | Foreground recovery survives an unresolved error probe and retains its safe failure classification. Complete-body fallback remains personal-only; canonical jam timelines are retained. Deletion event strips the local queue and stops a deleted active source. |
+| `server/src/library.ts` — `deleteTrack`; `app.ts`; `web/src/lib/api.ts`, `apiTypes.ts`, `stores/libraryState.ts` | Library cascade through the existing serialized JSON snapshot/optimistic-write path. Other owners and explicit copies are independent. |
+| `web/src/components/TrackMenu.tsx`, `views/Collection.tsx` | Existing Modal confirms deletion; Favourites exposes the existing `OfflinePlaylistButton` with virtual pin ID `favorites`. Existing classes, i18n and pagination reused. |
+| `web/src/lib/offlineStore.ts` — `removeOfflineTrack`, `saveOfflineAudio`, `writeOfflinePin`; `offlineDownloads.ts` — `deleteLocalAudio`, `fetchCompleteAudio`, `drain` | One initiating-installation IDB transaction strips audio/body/pin/library references; settings add optional bounded `deleted` IDs (max 2,000) rejecting late body/pin completions. Explicit download/pin can clear the selected markers. Existing database version 2, object stores/indexes and owner isolation remain. Progress reports exact bytes; percentage only for known positive content length. |
+| `web/src/stores/offline.ts`, `components/OfflineStorage.tsx` | Current download batch stores queued/downloading/ready/failed states; single existing worker, at most 5,000 pin target tracks and 100 visible progress rows. No parallel download mechanism. |
+| `web/src/lib/accountPreferences.ts` — `startAccountPreferences`; `App.tsx`; `stores/session.ts` | Starts after AuthGate; applies server state without echo, coalesces explicit field changes, fences owner/revision/cleanup, reverts offline edits. Uses existing UI/appearance/i18n stores and existing accent renderer. |
+| `server/src/googleSource.ts` — `sourceTrack`, `complete`, `googleMusicSource`; `googleImport.ts` — `resolve`, `run`; `playlistImport.ts` — `run`, `status`, `resume` | Retain/search metadata-only rows, supplement per-collection public metadata, preserve partial continuation results, bound anonymous original-ID fallback and expose safe per-item states/reasons. Google credentials remain private to import. |
+
+Diagnostics reuse the bounded allowlist/ring: `sync.seek_requested`, `sync.seek_sent`, `sync.command_received`, `sync.command_applied`, `sync.transfer_requested`, `sync.transfer_granted`. Local elapsed `ms` measures receive-to-apply or request-to-grant; no cross-device clock synchronization or guaranteed physical seek latency is asserted. No raw provider text, private credentials or device identifiers are added to these events.
+
+Offline deletion markers and downloads stay on their installation; no remote deletion tombstone is sent. Library mutations remain account-shared server data. A clean disconnect permits explicit takeover promptly, but an unreachable device's buffered sound cannot be proved silent. Browser autoplay, reduced UA model information, locked-page scheduling and provider availability remain real acceptance limits. No new DOM hook is required.
+
+Rollback: retain a consistent data/secret backup and prior assets/image. The SQLite column is additive and ignored by older source; browser IDB remains version 2. Do not clear downloaded audio or site data as an upgrade step. Old clients retain per-document identities until refreshed; replace all client assets during demo acceptance.

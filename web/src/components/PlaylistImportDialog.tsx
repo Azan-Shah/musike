@@ -4,7 +4,7 @@ import { accountRequest } from "../stores/session";
 import { useLibrary } from "../stores/library";
 import { Modal } from "./Modal";
 interface Report { id: string; status: string; destination: string | null; summary: { title: string; processed: number; total: number; added: number; already: number; skipped: number; failed: number; capped: boolean };
-  entries: { position: number; title: string; status: string }[]; }
+  entries: { position: number; title: string; status: string; reason?: string }[]; }
 const input = "h-11 w-full rounded-full bg-surface-1 px-4 text-sm ring-1 ring-line-strong";
 export function PlaylistImportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const t = useT(); const c = t.collaboration; const playlists = useLibrary(s => s.playlists);
@@ -29,7 +29,7 @@ export function PlaylistImportDialog({ open, onClose }: { open: boolean; onClose
     {report && <><h3 className="font-medium">{report.summary.title}</h3><p className="text-sm" role="status">{c.status[report.status as keyof typeof c.status] ?? report.status} · {report.summary.processed}/{report.summary.total}</p>
       <p className="text-sm text-fg-2">{t.features.imported}: {report.summary.added} · {t.features.already}: {report.summary.already} · {c.skipped}: {report.summary.skipped} · {c.failed}: {report.summary.failed}</p>
       {report.summary.capped && <p className="text-sm text-fg-2">{c.importCapped}</p>}
-      <ul className="scroll-area max-h-64 overflow-auto text-sm">{report.entries.map(e => <li key={e.position} className="flex flex-wrap justify-between gap-2 border-b border-line py-2 break-words"><span>{e.position + 1}. {e.title}</span><span className="text-fg-2">{c.status[e.status as keyof typeof c.status] ?? e.status}</span></li>)}</ul>
+      <ul className="scroll-area max-h-64 overflow-auto text-sm">{report.entries.map(e => <li key={e.position} className="flex flex-wrap justify-between gap-2 border-b border-line py-2 break-words"><span>{e.position + 1}. {e.title}</span><span className="text-fg-2">{e.status === "resolving" ? t.offline.resolving : c.status[e.status as keyof typeof c.status] ?? e.status}{e.reason && ` · ${e.reason === "provider-unavailable" ? t.features.originFailure : t.offline.unavailable}`}</span></li>)}</ul>
       <div className="flex flex-wrap gap-2"><button type="button" className="button-secondary" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 100))}>{c.previous}</button><button type="button" className="button-secondary" disabled={offset + 100 >= report.summary.total} onClick={() => setOffset(offset + 100)}>{c.next}</button>
         <button type="button" className="button-secondary" disabled={busy} onClick={() => void act(`/api/playlist-imports/${report.id}/${active ? "cancel" : "resume"}`, {})}>{active ? t.common.cancel : c.resume}</button></div>
     </>}

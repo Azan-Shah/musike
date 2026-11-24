@@ -7,6 +7,11 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 
 export const en = {
   offline: {
+    resolving: "Resolving",
+    deleteTrack: "Delete from library",
+    deleteConfirm: "Remove this song from all your personal playlists, Favourites and history? Its download on this device will also be deleted. If playing here, it will stop.",
+    progress: "Download progress", queued: "Queued", downloading: "Downloading", failed: "Failed",
+
     allDownloaded: "All downloaded audio",
     downloadQueueFull: "The download queue is full. Wait for a download to finish.",
     metadataUnavailable: "The latest library could not be saved offline. Existing downloads are still available.",

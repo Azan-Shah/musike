@@ -25,7 +25,7 @@ export function AccountPanel() {
     <PlaybackDevices />
   </section>;
 }
-interface ImportReportData { items: { sourceId: string; title: string; kind: string; status: string; reason?: string; candidates?: { id: string; title: string; score: number; reason: string }[] }[]; unavailable: string[]; imported?: number; alreadyPresent?: number; notFound?: number; reviewNeeded?: number; progress?: { phase: string; processed: number; total: number | null; current?: string; lastCompleted?: { title: string; status: string }; pending?: number }; }
+interface ImportReportData { items: { sourceId: string; title: string; kind: string; status: string; reason?: string; candidates?: { id: string; title: string; score: number; reason: string }[] }[]; unavailable: string[]; imported?: number; alreadyPresent?: number; notFound?: number; reviewNeeded?: number; progress?: { phase: string; processed: number; total: number | null; current?: string; active?: { sourceId: string; title: string; status: string }; waiting?: { sourceId: string; title: string; status: string }[]; lastCompleted?: { title: string; status: string }; pending?: number }; }
 function ImportReport({ report, identity }: { report: ImportReportData; identity: string }) {
   const f = useT().features; const [unresolved, setUnresolved] = useState(false);
   const shown = useMemo(() => unresolved ? report.items.filter((item) => ["not-found", "needs-review"].includes(item.status)) : report.items, [report.items, unresolved]);
@@ -79,6 +79,8 @@ function GooglePanel() {
       <p>{data.report?.progress?.phase === "fetching" ? t.features.fetchingLibrary : t.features.matchingTracks}</p>
       <p>{t.features.progress}: {data.report?.progress?.processed ?? 0} / {data.report?.progress?.total ?? "—"}</p>
       {data.report?.progress?.lastCompleted && <p className="break-words">{data.report.progress.lastCompleted.status === "matched" ? t.features.matchPending : data.report.progress.lastCompleted.status === "needs-review" ? t.features.reviewNeeded : data.report.progress.lastCompleted.status === "not-found" ? t.features.notFound : data.report.progress.lastCompleted.status === "already-present" ? t.features.already : t.features.imported}: {data.report.progress.lastCompleted.title}</p>}
+      {data.report?.progress?.active && <p className="break-words">{t.offline.resolving}: {data.report.progress.active.title}</p>}
+      {!!data.report?.progress?.waiting?.length && <ul className="scroll-area max-h-32 overflow-auto">{data.report.progress.waiting.map((item, index) => <li key={`${item.sourceId}:${index}`} className="flex justify-between gap-2 text-xs"><span>{item.title}</span><span>{t.offline.queued}</span></li>)}</ul>}
       {data.report?.progress?.current && <p className="break-words">{data.report.progress.current}</p>}
     </div>}
     {data?.report && <ImportReport report={data.report} identity={data.runId ?? "latest"} />}

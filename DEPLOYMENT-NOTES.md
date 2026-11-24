@@ -1,3 +1,21 @@
+# Current delivery — approved unresolved-issues revision, 24 November 2026
+
+Use `Musike_Production_Fixes_20261124.zip` as a complete source tree, OR apply `Musike_Production_Fixes_20261124.patch` to the exact `musike-main (9).zip` baseline, SHA-256 `5271972bc2597149118925838fa3145eda01880f65ee61043e1aa2d473c8c7ca`. These are alternative methods. Do not reapply historical patches included as repository evidence. See `REVISION-20261124-IMPACT.md` for exact file/function scope. No deployment was performed.
+
+Build with pinned pnpm 10.14.0: `corepack pnpm install --frozen-lockfile`, `corepack pnpm test`, `corepack pnpm typecheck`, `corepack pnpm build`, `corepack pnpm --filter @musike/server bundle`. Dependency manifests/lockfile, runtime versions, CSS and operator environment/compose/wrapper content remain unchanged. The wrapper executable bit is restored.
+
+Auth-enabled startup adds worker migration `account-appearance-v1`: an additive JSON column in account_preferences with consistent populated-DB backup (0600), transaction and idempotent marker. Back up data plus instance secret through the normal procedure before demo startup. Auth-off stays JSON and does not open SQLite. Existing normalization values/revisions are preserved.
+
+Refresh every PWA/browser client onto the rebuilt assets. One account/browser installation uses one Web Lock coordinator and a durable identity; other tabs mirror it. Storage/lock-unavailable browsers retain independent document identities. Browser/OS names are best effort, and autoplay on refresh requires real-browser acceptance. Preserve downloads; do not clear site data. IDB remains version 2, with optional local deletion markers in existing settings rows.
+
+Normal transfer still pauses/acknowledges the previous reachable output. A clean final SSE disconnect marks the device offline immediately; half-open connections expire through inbound freshness. Explicit stale takeover is allowed, never silent timer takeover. Device settings sync through existing 15-second presence responses; offline storage and volume stay local. Deleting personal library references purges downloaded audio only on the initiating installation; independent remote downloads remain.
+
+Demo first: follow current ACCEPTANCE-CHECKLIST.md, especially Samsung A07 normal playlist on mobile data across the third and later transitions and unlock during failed loading; two-device seek/takeover/refresh; Google import and unavailable/review counts; Favourites update/progress/deletion; account settings propagation. Synthetic fixtures cannot certify physical notification/audio, live provider access or production Docker. Chromium visual smoke was attempted but blocked before page load by environment socket permissions.
+
+Rollback retains prior image/assets and a consistent data/secret backup. The new SQLite column is additive; an older source ignores it. Existing browser IDB version-2 rollback constraints still apply. No source package includes vendor SDK binaries, credentials, dependencies, runtime data or generated bundles.
+
+---
+
 # Current delivery — approved production-source fixes, 23 November 2026
 
 Use `Musike_Production_Fixes_20261123.zip` as a complete source tree, or apply `Musike_Production_Fixes_20261123.patch` to the exact `musike-main (8).zip` baseline (SHA-256 `9bb76ecbf6423562b10cbf6af15229ec14bf954d4536913c46749476f3ee0128`). These are alternative installation methods. Do not reapply historical patches contained in the repository. The separately supplied updated Hermes report is preserved in the delivered source. This header supersedes earlier deployment instructions below.

@@ -74,8 +74,11 @@ test("browser sync coordinators preserve sole outputs across transfers and cross
     assert.equal(second.store.getState().original[0], second.store.getState().queue[0]);
     second.store.getState().toggle(); await until(() => first.store.getState().status === "paused" && second.store.getState().status === "paused");
     second.store.getState().seek(42); await until(() => first.store.getState().position === 42);
+    const seekStarted = performance.now(); first.store.getState().seek(90);
+    await until(() => second.store.getState().position === 90);
+    assert.ok(performance.now() - seekStarted < 1000, "forward seek must not wait for the five-second snapshot tick");
     await second.mod.claimPlayback(); await until(() => second.mod.playbackCanOutput() && second.store.getState().status === "playing");
-    assert.equal(first.mod.playbackCanOutput(), false); assert.equal(second.store.getState().position, 42);
+    assert.equal(first.mod.playbackCanOutput(), false); assert.equal(second.store.getState().position, 90);
     assert.ok(output.lastIndexOf("session-a:pause") < output.lastIndexOf("session-b:play"));
     await first.mod.claimPlayback(); await until(() => first.mod.playbackCanOutput() && first.store.getState().status === "playing");
     await second.mod.claimPlayback(); await until(() => second.mod.playbackCanOutput() && second.store.getState().status === "playing");

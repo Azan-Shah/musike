@@ -2,7 +2,7 @@ import { randomBytes, randomUUID, createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { Accounts, fail } from "./accounts.js";
 import { googleMusicSource, type GoogleTokens, type ImportSource, type SourceTrack } from "./googleSource.js";
-import { ytdlpSearch } from "./ytdlp.js";
+import { resolveStreams, ytdlpSearch } from "./ytdlp.js";
 import { sanitizeTrack } from "./library.js";
 import { VIDEO_ID, type Track } from "./types.js";
 import { withClient, search } from "./search.js";
@@ -17,7 +17,7 @@ export interface GoogleOptions { clientId?: string; clientSecret?: string; redir
   candidates?: (track: SourceTrack, mode: "artist" | "music" | "title", signal: AbortSignal) => Promise<SearchCandidate[]>; }
 interface ItemReport { sourceId: string; kind: string; title: string; status: "imported" | "already-present" | "not-found" | "needs-review"; candidates?: ScoredCandidate[]; reason?: string; }
 interface Report { items: ItemReport[]; unavailable: string[]; imported: number; alreadyPresent: number; notFound: number; reviewNeeded: number;
-  progress: { phase: "queued" | "fetching" | "matching" | "complete" | "cancelled"; processed: number; total: number | null; current?: string; lastCompleted?: { sourceId: string; title: string; status: string }; pending?: number; startedAt: number; updatedAt: number } }
+  progress: { phase: "queued" | "fetching" | "matching" | "complete" | "cancelled"; processed: number; total: number | null; current?: string; waiting?: { sourceId: string; title: string; status: "queued" }[]; active?: { sourceId: string; title: string; status: "resolving" }; lastCompleted?: { sourceId: string; title: string; status: string }; pending?: number; startedAt: number; updatedAt: number } }
 interface Resolution { track: Track | null; candidates: ScoredCandidate[]; reason?: string; }
 const newReport = (): Report => ({ items: [], unavailable: [], imported: 0, alreadyPresent: 0, notFound: 0, reviewNeeded: 0,
   progress: { phase: "queued", processed: 0, total: null, startedAt: Date.now(), updatedAt: Date.now() } });
@@ -123,7 +123,7 @@ export class GoogleImport {
       if (automatic && !(await this.accounts.db.get("SELECT user_id FROM google_tokens WHERE user_id=? AND auto_sync=1", [user]))) throw new Error("Sync cancelled");
       return this.run(user, id, controller.signal, report);
     }, controller.signal).catch(async () => {
-      report.progress.phase = "cancelled"; report.progress.current = undefined; report.progress.updatedAt = Date.now();
+      report.progress.phase = "cancelled"; report.progress.active = undefined; report.progress.waiting = []; report.progress.current = undefined; report.progress.updatedAt = Date.now();
       report.unavailable.push("Import failed or cancelled; completed items retained");
       await this.accounts.db.run("UPDATE import_runs SET status='error',report=? WHERE id=? AND user_id=?", [JSON.stringify(report), id, user]).catch(() => {});
       await this.accounts.audit(user, "google.import-failed", id, "background", "error").catch(() => {});
@@ -136,6 +136,7 @@ export class GoogleImport {
     if (this.options.resolve) return { track: await waitForSignal(this.options.resolve(source, signal), signal), candidates: [] };
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
     const originalSignal = AbortSignal.any([deadline, AbortSignal.timeout(6000)]);
+    let originalFailed = false;
     const original = async () => {
       const info: any = await withClient((yt) => yt.getBasicInfo(source.id), undefined, originalSignal);
       if (info.playability_status?.status !== "OK") return null;
@@ -145,7 +146,17 @@ export class GoogleImport {
     };
     if (VIDEO_ID.test(source.id)) {
       try { const track = await waitForSignal(this.options.original ? this.options.original(source, originalSignal) : original(), originalSignal); if (track) return { track, candidates: [] }; }
-      catch { if (signal.aborted) throw new Error("Import cancelled"); }
+      catch {
+        if (signal.aborted) throw new Error("Import cancelled");
+        originalFailed = true;
+        // Anonymous original-ID extraction is independent of Google's import-only credentials.
+        // It is bounded separately so one refused Music client does not force fuzzy replacement.
+        if (!this.options.original) try {
+          const info = await resolveStreams(source.id, AbortSignal.any([deadline, AbortSignal.timeout(6000)]));
+          return { track: sanitizeTrack({ ...source, title: source.title || info.title, duration: source.duration || info.duration,
+            thumb: `https://i.ytimg.com/vi/${source.id}/mqdefault.jpg`, art: `https://i.ytimg.com/vi/${source.id}/hq720.jpg`, kind: "song" }), candidates: [] };
+        } catch { if (signal.aborted) throw new Error("Import cancelled"); }
+      }
     }
     const candidates: SearchCandidate[] = []; let failures = 0;
     for (const mode of ["artist", "music", "title"] as const) {
@@ -161,7 +172,7 @@ export class GoogleImport {
           duration: match.duration ?? source.duration ?? 0, thumb: `https://i.ytimg.com/vi/${match.id}/mqdefault.jpg`, art: `https://i.ytimg.com/vi/${match.id}/hq720.jpg`, kind: "song" }), candidates: [] };
       } catch { failures++; if (signal.aborted) throw new Error("Import cancelled"); }
     }
-    return { track: null, reason: failures === 3 || deadline.aborted ? "provider-unavailable" : "no-confident-match", candidates: rankImportCandidates(source, candidates).filter((item) => item.score >= .55).slice(0, 3) };
+    return { track: null, reason: failures > 0 || originalFailed || deadline.aborted ? "provider-unavailable" : "no-confident-match", candidates: rankImportCandidates(source, candidates).filter((item) => item.score >= .55).slice(0, 3) };
   }
   private async run(user: string, run: string, signal: AbortSignal, report: Report) {
     report.progress.phase = "fetching";
@@ -203,10 +214,12 @@ export class GoogleImport {
         }
         added = []; records = []; report.progress.pending = 0; savedAt = Date.now(); await checkpoint();
       };
-      for (const item of tracks) {
+      for (const [position, item] of tracks.entries()) {
         check();
         if (processed >= max) { if (!report.unavailable.includes("Import item limit reached")) report.unavailable.push("Import item limit reached"); break; }
         processed++; report.progress.processed = processed - 1; report.progress.current = item.title;
+        report.progress.active = { sourceId: item.id, title: item.title, status: "resolving" };
+        report.progress.waiting = tracks.slice(position + 1, Math.min(position + 101, position + 1 + max - processed)).map(t => ({ sourceId: t.id, title: t.title, status: "queued" }));
         let completedStatus = "matched";
         const key = `${collection}:${item.id}`; const mapped = existing.get(`${kind}:${key}`);
         if (mapped && ids.has(mapped)) { completedStatus = "already-present"; records.push({ item, trackId: mapped, status: "already-present" }); }
@@ -228,6 +241,7 @@ export class GoogleImport {
           }
         }
         report.progress.processed = processed; report.progress.updatedAt = Date.now();
+        report.progress.active = undefined;
         report.progress.lastCompleted = { sourceId: item.id, title: item.title, status: completedStatus };
         report.progress.pending = records.length;
         if (records.length >= 20 || report.items.length === 0 && records.length > 0 || Date.now() - savedAt >= 1000) await flush();
@@ -249,7 +263,7 @@ export class GoogleImport {
     await group([...source.history.slice(0, 60)].reverse(), "history", "history", (await lib.getLibrary()).history, async (tracks) => {
       for (const track of tracks) { check(); await lib.pushHistory(track); }
     });
-    check(); report.progress.phase = "complete"; report.progress.current = undefined; report.progress.updatedAt = Date.now();
+    check(); report.progress.phase = "complete"; report.progress.active = undefined; report.progress.waiting = []; report.progress.current = undefined; report.progress.updatedAt = Date.now();
     await this.accounts.db.batch([
       { sql: "UPDATE import_runs SET status=?,report=? WHERE id=? AND user_id=?", params: [report.unavailable.length || report.notFound || report.reviewNeeded ? "partial" : "done", JSON.stringify(report), run, user] },
       { sql: "UPDATE google_tokens SET last_sync=? WHERE user_id=?", params: [this.accounts.now(), user] },

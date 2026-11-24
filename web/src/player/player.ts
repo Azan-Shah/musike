@@ -83,6 +83,8 @@ export interface PlayerState {
 // The website and installed PWA share this browser audio element.
 const audio = createAudio();
 let resumeWanted = false;
+let unlockPending = false;
+let recoveryPaused = false;
 let lastFailure: FailureKind | undefined;
 let recoveryCount = 0;
 let unlockRecoveryUsed = false;
@@ -195,6 +197,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
     if (!track) return;
     if (recoveryId !== track.id) { recoveryId = track.id; recoveryCount = 0; unlockRecoveryUsed = false; }
     resumeWanted = opts.autoplay !== false;
+    if (!opts.disablePreload) unlockPending = false;
+    recoveryPaused = false;
     const offline = !!useSession.getState().offline;
     automaticTrack = !!opts.automatic;
     const complete = !opts.disablePreload && (!s.preferVideo || offline) ? completePreload.take(track.id) : null;
@@ -422,6 +426,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
         { label: t.features.signInAgain, run: () => location.reload() } :
         { label: t.features.downloadDiagnostics, run: () => void saveFile("musike-playback-diagnostics.json", JSON.stringify(playbackEvents(), null, 2)) },
     );
+    // Unlock can arrive while the asynchronous error probe is still pending.
+    if (unlockPending && resumeWanted && recoverableFailure(failure)) queueMicrotask(restorePlayback);
     if (!failure && code !== "tool_missing" && get().index < get().queue.length - 1) {
       setTimeout(() => mine === token && get().next(), 2500);
     }
@@ -441,7 +447,12 @@ export const usePlayer = create<PlayerState>((set, get) => {
     }, valid);
     if (!valid()) return;
     if (result) { toast(getT().offline.skippingDownloaded); load(result.index, { automatic: true, body: result.blob }); }
-    else { resumeWanted = false; activeMedia()?.pause(); set({ status: "paused", statusText: { error: getT().offline.noNextDownloaded } }); }
+    else {
+      // Keep a recoverable error distinct from a deliberate pause so unlock/online can retry.
+      recoveryPaused = true;
+      set({ status: "paused", statusText: { error: getT().offline.noNextDownloaded } }); activeMedia()?.pause();
+      if (unlockPending) queueMicrotask(restorePlayback);
+    }
   }
   function onError(media: HTMLMediaElement, stalled = false) {
     if (useSession.getState().offline) {
@@ -464,7 +475,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
       if (mine !== token || sessionLost) return;
       // A successful probe describes the origin, not the stalled element. It must not turn a
       // confirmed no-progress deadline into an unsupported-codec failure.
-      const kind = stalled && !failure && !code ? "timeout" : failure;
+      const emptyNetworkSource = media.error?.code === 4 && media.readyState === 0 && !media.buffered.length && !url.startsWith("blob:");
+      const kind = !failure && !code && (stalled || emptyNetworkSource) ? "timeout" : failure;
+      lastFailure = kind;
       if (resumeWanted && recoverableFailure(kind) && !code && recoveryCount < 2) {
         const at = media.currentTime || get().position; const index = get().index;
         recoveryCount++; lastFailure = kind;
@@ -504,8 +517,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
       syncPlaybackState();
     });
     media.addEventListener("pause", () => {
-      if (!isActive() || !media.paused || media.ended || get().status === "loading" || get().status === "error") return;
-      resumeWanted = false; set({ status: "paused" });
+      if (!isActive() || !media.paused || media.ended || get().status === "loading" || get().status === "error" || recoveryPaused) return;
+      resumeWanted = false; unlockPending = false; set({ status: "paused" });
       syncPlaybackState();
     });
     media.addEventListener("waiting", () => {
@@ -649,7 +662,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       const s = get();
       if (retryTimer || s.status === "loading" && resumeWanted) {
         completePreload.clear();
-        cancelRetry(); resumeWanted = false; token++; activeMedia()?.pause(); loaded = null; set({ status: "paused", statusText: null }); return;
+        cancelRetry(); resumeWanted = false; unlockPending = false; token++; activeMedia()?.pause(); loaded = null; set({ status: "paused", statusText: null }); return;
       }
       const track = s.queue[s.index];
       if (!track) return;
@@ -663,7 +676,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       if (stale || s.status === "error") return load(s.index, { startAt: s.position });
       const media = mediaFor(kind);
       if (media.paused) { resumeWanted = true; play(media); }
-      else { resumeWanted = false; media.pause(); }
+      else { resumeWanted = false; unlockPending = false; media.pause(); }
     },
 
     next: () => {
@@ -740,7 +753,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     setAutoRadio: (autoRadio) => set({ autoRadio }),
     suspendOutput: () => {
       completePreload.clear(); if (activeBlob) { URL.revokeObjectURL(activeBlob); activeBlob = null; }
-      cancelRetry(); resumeWanted = false; token++; loaded = null; pendingSeek = 0;
+      cancelRetry(); resumeWanted = false; unlockPending = false; token++; loaded = null; pendingSeek = 0;
       radioJob?.controller.abort(); manualRadio?.abort();
       if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; }
       for (const media of [audio, videoEl]) { media.pause(); media.removeAttribute("src"); media.load(); }
@@ -826,8 +839,12 @@ addEventListener("pagehide", persist);
 function restorePlayback() {
   recordPlayback("page.resume"); void flushPlaybackEvents();
   const state = usePlayer.getState(); state.warmUpcoming();
-  if (resumeWanted && state.status === "error" && recoverableFailure(lastFailure) && !unlockRecoveryUsed && document.visibilityState !== "hidden") {
-    unlockRecoveryUsed = true; recoveryCount = 0; recordPlayback("player.unlock_recovery"); usePlayer.getState().toggle();
+  if (resumeWanted && document.visibilityState !== "hidden") { unlockPending = true;
+    if (playbackCanOutput() && state.status === "playing") void normalization.start(state.mediaKind === "video" ? videoEl : audio);
+  }
+  if (resumeWanted && (state.status === "error" || recoveryPaused) && recoverableFailure(lastFailure) && !unlockRecoveryUsed && document.visibilityState !== "hidden") {
+    unlockRecoveryUsed = true; unlockPending = false; recoveryCount = 0; recordPlayback("player.unlock_recovery"); if (recoveryPaused) { recoveryPaused = false; usePlayer.setState({ status: "error" }); }
+    usePlayer.getState().toggle();
   }
 }
 document.addEventListener("visibilitychange", () => {
@@ -906,3 +923,12 @@ export function useStatusText(): string | null {
   if (note === null) return null;
   return typeof note === "string" ? t.player.status[note] : note.error;
 }
+
+addEventListener("musike:track-deleted", event => {
+  const id = (event as CustomEvent<string>).detail; const s = usePlayer.getState();
+  const current = s.queue[s.index]; const queue = s.queue.filter(t => t.id !== id);
+  if (current?.id === id) s.suspendOutput();
+  completePreload.clear();
+  usePlayer.setState({ queue, original: s.original?.filter(t => t.id !== id) ?? null,
+    index: Math.max(0, queue.findIndex(t => t.id === current?.id)), ...(current?.id === id ? { status: "paused", position: 0, duration: 0 } : {}) });
+});

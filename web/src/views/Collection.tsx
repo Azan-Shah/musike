@@ -130,6 +130,7 @@ export default function Collection({ kind, downloaded = false }: Props) {
         )}
       </div>
 
+      {kind === "favorites" && !offline && !downloaded && <section className="px-4 pb-4 md:px-6"><OfflinePlaylistButton playlist={{ id: "favorites", name, tracks, createdAt: 0, updatedAt: 0 }} /></section>}
       {playlist && !offline && <section className="px-4 pb-4 md:px-6"><OfflinePlaylistButton playlist={playlist} /></section>}
       <div className="px-2 md:px-3">
         {tracks.length > 0 ? (

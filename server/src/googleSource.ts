@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Innertube } from "youtubei.js";
 import { toTrack, text } from "./search.js";
 
@@ -9,19 +10,33 @@ const items = (page: any): any[] => {
   const content = page.contents ?? page.items ?? [];
   return Array.isArray(content) ? content.flatMap((s: any) => s.items ?? s.contents ?? [s]) : content.items ?? content.contents ?? [];
 };
-const track = (item: any): SourceTrack | null => {
-  const t = toTrack(item, "song"); return t ? { id: t.id, title: t.title, artist: t.artist, album: t.album, duration: t.duration } : null;
+export const sourceTrack = (item: any): SourceTrack | null => {
+  if (!item || typeof item !== "object") return null;
+  const id = item.id ?? item.video_id ?? item.endpoint?.payload?.videoId ?? item.navigation_endpoint?.payload?.videoId;
+  const t = toTrack({ ...item, id }, "song");
+  if (!t) {
+    const title = text(item.title) || text(item.name);
+    const artist = (item.artists ?? item.authors ?? []).map((a: { name?: string }) => a.name ?? "").filter(Boolean).join(", ");
+    if (!title || !artist && !item.duration && !/MusicResponsiveListItem|PlaylistVideo/.test(item.type ?? "")) return null;
+    // Preserve searchable song metadata even when a provider renderer omits its video ID.
+    return { id: `unresolved-${createHash("sha256").update(`${title}\n${artist}`).digest("hex").slice(0, 24)}`, title, artist,
+      duration: typeof item.duration === "number" ? item.duration : item.duration?.seconds ?? 0 };
+  }
+  return { id: t.id, title: t.title, artist: t.artist || text(item.subtitle) || text(item.author), album: t.album,
+    duration: typeof item.duration === "number" ? item.duration : t.duration };
 };
+const track = sourceTrack;
 async function complete(page: any, limit: number, capped: () => void = () => {}): Promise<any[]> {
   const out: any[] = []; const seen = new Set<string>();
   for (let n = 0; n < 200; n++) {
     out.push(...items(page)); if (out.length >= limit) { if (out.length > limit || page.has_continuation) capped(); return out.slice(0, limit); }
     if (!page.has_continuation) return out;
     const signature = JSON.stringify(out.slice(-3).map((item) => item.id));
-    if (seen.has(signature)) throw new Error("Provider continuation repeated"); seen.add(signature);
-    page = await page.getContinuation();
+    if (seen.has(signature)) { capped(); return out; } seen.add(signature);
+    try { page = await page.getContinuation(); }
+    catch { capped(); return out; }
   }
-  throw new Error("Provider pagination limit reached");
+  capped(); return out;
 }
 
 /** Dedicated import-only session: never exported to playback, shared search, stream resolution or Google cookies. */
@@ -48,7 +63,9 @@ export async function googleMusicSource(tokens: GoogleTokens, credentials: { cli
           if (!entry.id || entry.id === "LM") continue;
           try {
             const page: any = kind === "album" ? await yt!.music.getAlbum(entry.id) : await yt!.music.getPlaylist(entry.id);
-            const tracks = (await complete(page, limit, () => result.unavailable.push(`${kind}:${String(entry.id).slice(0, 100)}:item-limit`))).map(track).filter((t): t is SourceTrack => !!t);
+            const raw = await complete(page, limit, () => result.unavailable.push(`${kind}:${String(entry.id).slice(0, 100)}:incomplete-or-item-limit`));
+            const tracks = raw.map(track).filter((t): t is SourceTrack => !!t);
+            if (tracks.length < raw.length) result.unavailable.push(`${kind}:${String(entry.id).slice(0, 100)}:unreadable-items:${raw.length - tracks.length}`);
             result.collections.push({ id: String(entry.id), name: text(entry.title) || kind, kind, tracks });
           } catch { result.unavailable.push(`${kind}:${String(entry.id).slice(0, 100)}`); }
         }
@@ -71,20 +88,27 @@ export async function googleMusicSource(tokens: GoogleTokens, credentials: { cli
     if (out.length > limit || pageToken) result.unavailable.push(`${endpoint}:item-limit`);
     return out.slice(0, limit);
   };
-  const dataTrack = (item: any): SourceTrack => ({ id: item.contentDetails?.videoId ?? item.id,
+  const dataTrack = (item: any): SourceTrack => ({ id: item.contentDetails?.videoId ?? item.snippet?.resourceId?.videoId ?? item.id,
     title: item.snippet?.title ?? "", artist: item.snippet?.videoOwnerChannelTitle ?? item.snippet?.channelTitle ?? "" });
-  if (!playlistOK) {
-    try {
-      for (const playlist of await api("playlists", { part: "snippet", mine: "true" })) {
+  // Supplement each private Music collection independently. One successful filter must
+  // not suppress recovery of a partially unreadable/failed playlist via the public API.
+  try {
+    for (const playlist of await api("playlists", { part: "snippet", mine: "true" })) {
+      try {
         const tracks = (await api("playlistItems", { part: "snippet,contentDetails", playlistId: playlist.id })).map(dataTrack);
-        result.collections.push({ id: playlist.id, name: playlist.snippet.title, kind: "playlist", tracks });
-      }
-    } catch { result.unavailable.push("playlists:provider-unavailable"); }
-  }
-  if (!result.likes.length) {
-    try { result.likes = (await api("videos", { part: "snippet", myRating: "like" })).map(dataTrack); }
-    catch { result.unavailable.push("likes:provider-unavailable"); }
-  }
+        const existing = result.collections.find(p => p.kind === "playlist" && p.id === playlist.id);
+        if (existing) {
+          const ids = new Set(existing.tracks.map(t => t.id));
+          existing.tracks.push(...tracks.filter(t => !ids.has(t.id) && !!ids.add(t.id)));
+        } else result.collections.push({ id: playlist.id, name: playlist.snippet.title, kind: "playlist", tracks });
+      } catch { result.unavailable.push(`playlist:${String(playlist.id).slice(0, 100)}:provider-unavailable`); }
+    }
+  } catch { if (!playlistOK) result.unavailable.push("playlists:provider-unavailable"); }
+  try {
+    const likes = (await api("videos", { part: "snippet", myRating: "like" })).map(dataTrack);
+    const ids = new Set(result.likes.map(t => t.id));
+    result.likes.push(...likes.filter(t => !ids.has(t.id) && !!ids.add(t.id)));
+  } catch { if (!result.likes.length) result.unavailable.push("likes:provider-unavailable"); }
   try {
     let page: any = await yt!.actions.execute("/browse", { browseId: "FEmusic_history", client: "YTMUSIC", parse: true });
     const seen = new Set<string>();

@@ -50,13 +50,28 @@ export class Accounts {
     const job = previous.catch(() => {}).then(work); this.locks.set(key, job);
     try { return await job; } finally { if (this.locks.get(key) === job) this.locks.delete(key); }
   }
-  async preferences(owner: string): Promise<{ normalization: "quiet" | "standard" | "loud"; revision: number }> {
-    const row = await this.db.get("SELECT normalization,revision FROM account_preferences WHERE user_id=?", [owner]);
-    return { normalization: row?.normalization ?? "standard", revision: row?.revision ?? 0 };
+  async preferences(owner: string): Promise<{ normalization: "quiet" | "standard" | "loud"; revision: number; theme?: "dark" | "light"; language?: "en" | "pt-BR"; appearance?: Record<string, string | boolean> }> {
+    const row = await this.db.get("SELECT normalization,revision,json FROM account_preferences WHERE user_id=?", [owner]);
+    return { ...(row ? JSON.parse(row.json) : {}), normalization: row?.normalization ?? "standard", revision: row?.revision ?? 0 };
   }
-  async setPreferences(owner: string, normalization: unknown) {
-    if (normalization !== "quiet" && normalization !== "standard" && normalization !== "loud") throw fail(400, "Invalid normalization level");
-    return this.db.get<{ normalization: "quiet" | "standard" | "loud"; revision: number }>("INSERT INTO account_preferences(user_id,normalization,revision) VALUES(?,?,1) ON CONFLICT(user_id) DO UPDATE SET normalization=excluded.normalization,revision=account_preferences.revision+1 RETURNING normalization,revision", [owner, normalization]);
+  async setPreferences(owner: string, input: unknown) {
+    const patch = typeof input === "string" ? { normalization: input } : input as Record<string, unknown>;
+    if (!patch || typeof patch !== "object" || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some(k => !["normalization", "theme", "language", "appearance"].includes(k))) throw fail(400, "Invalid preferences");
+    if (patch.normalization !== undefined && !["quiet", "standard", "loud"].includes(patch.normalization as string)) throw fail(400, "Invalid normalization level");
+    if (patch.theme !== undefined && !["dark", "light"].includes(patch.theme as string) || patch.language !== undefined && !["en", "pt-BR"].includes(patch.language as string)) throw fail(400, "Invalid preferences");
+    if (patch.appearance !== undefined) {
+      const appearance = patch.appearance as Record<string, unknown>;
+      const booleans = ["sidebarPlaylists", "compactSidebar", "albumColumn", "texture", "homeShortcuts", "homeRecent", "homeFavorites"];
+      if (!appearance || typeof appearance !== "object" || Array.isArray(appearance) || Object.entries(appearance).some(([k, v]) => k === "accent" ? typeof v !== "string" || !/^#[0-9a-f]{6}$/i.test(v) : !booleans.includes(k) || typeof v !== "boolean")) throw fail(400, "Invalid appearance");
+    }
+    return this.lock(`preferences:${owner}`, async () => {
+      const old = await this.preferences(owner);
+      const { normalization, revision: _revision, ...shared } = old;
+      const next = { ...shared, ...patch, ...(patch.appearance ? { appearance: { ...old.appearance, ...patch.appearance as object } } : {}) };
+      delete (next as Record<string, unknown>).normalization;
+      await this.db.run("INSERT INTO account_preferences(user_id,normalization,revision,json) VALUES(?,?,1,?) ON CONFLICT(user_id) DO UPDATE SET normalization=excluded.normalization,json=excluded.json,revision=account_preferences.revision+1", [owner, patch.normalization as string ?? normalization, JSON.stringify(next)]);
+      return this.preferences(owner);
+    });
   }
   async setting<T>(key: string, fallback: T): Promise<T> {
     const row = await this.db.get("SELECT value FROM settings WHERE key=?", [key]);

@@ -3,7 +3,7 @@ import { getT } from "../i18n";
 import { useOffline } from "../stores/offline";
 import { useSession } from "../stores/session";
 import type { Library, Playlist, Track } from "./types";
-import { BUDGETS, MAX_AUDIO, MIB, offlineSettings, offlineSummary, readOfflineLibrary, saveOfflineLibrary, purgeOfflineOwner, readOfflineAudio, removeOfflinePin, saveOfflineAudio, touchOfflineAudio, trimOfflineAudio, writeOfflinePin } from "./offlineStore";
+import { BUDGETS, MAX_AUDIO, MIB, offlineSettings, offlineSummary, readOfflineLibrary, saveOfflineLibrary, purgeOfflineOwner, readOfflineAudio, removeOfflineTrack, removeOfflinePin, saveOfflineAudio, touchOfflineAudio, trimOfflineAudio, writeOfflinePin } from "./offlineStore";
 
 const OWNER = "musike:offline-owner";
 export const offlineOwner = () => { try { return sessionStorage.getItem("musike:user") || null; } catch { return null; } };
@@ -55,9 +55,9 @@ export async function setOfflineBudget(mib: number, enabled: boolean) {
   if (enabled) await navigator.storage?.persist?.().catch(() => false);
   await trimOfflineAudio(owner); await refreshOffline(); notify();
 }
-export function cancelOfflineDownloads() { generation++; controller?.abort(); controller = null; recent = null; pendingPin = null; requested.clear(); }
+export function cancelOfflineDownloads() { useOffline.setState({ progress: [] }); generation++; controller?.abort(); controller = null; recent = null; pendingPin = null; requested.clear(); }
 /** No range response, opaque response, HTML or video MIME can become a downloaded song. */
-export async function fetchCompleteAudio(id: string, signal: AbortSignal, transport: typeof fetch = fetch): Promise<Blob> {
+export async function fetchCompleteAudio(id: string, signal: AbortSignal, transport: typeof fetch = fetch, progress?: (bytes: number, total: number | null) => void): Promise<Blob> {
   if (!/^[A-Za-z0-9_-]{11}$/.test(id)) throw new Error("audio");
   const response = await transport(`/api/stream/${id}/audio`, { credentials: "same-origin", redirect: "manual", signal: AbortSignal.any([signal, AbortSignal.timeout(90_000)]) });
   const type = response.headers.get("content-type") ?? "";
@@ -66,7 +66,7 @@ export async function fetchCompleteAudio(id: string, signal: AbortSignal, transp
   if (response.status !== 200 || response.redirected || !type.startsWith("audio/") || !response.body || Number(response.headers.get("content-length")) > MAX_AUDIO) { await response.body?.cancel(); throw new Error("audio"); }
   const reader = response.body.getReader(); const chunks: Uint8Array<ArrayBuffer>[] = []; let bytes = 0;
   try {
-    for (;;) { const { done, value } = await reader.read(); if (done) break; bytes += value.length; if (bytes > MAX_AUDIO) throw new Error("limit"); chunks.push(new Uint8Array(value)); }
+    for (;;) { const { done, value } = await reader.read(); if (done) break; bytes += value.length; progress?.(bytes, length > 0 ? length : null); if (bytes > MAX_AUDIO) throw new Error("limit"); chunks.push(new Uint8Array(value)); }
   } finally { await reader.cancel().catch(() => {}); }
   if (!bytes || length > 0 && bytes !== length || signal.aborted) throw new Error("audio");
   return new Blob(chunks, { type });
@@ -85,6 +85,7 @@ export async function downloadOfflineTrack(track: Track) {
   const summary = await offlineSummary(owner);
   if (!summary.settings.enabled) throw new Error(getT().offline.enableFirst);
   if (requested.size >= 100) throw new Error(getT().offline.downloadQueueFull);
+  await offlineSettings(owner, { deleted: (summary.settings.deleted ?? []).filter(id => id !== track.id) });
   requested.set(track.id, track); void drain();
 }
 export async function snapshotOfflineLibrary(library: Library) {
@@ -117,6 +118,7 @@ export async function pinOfflinePlaylist(playlist: Playlist) {
   if (!summary.settings.enabled) { useOffline.setState({ error: getT().offline.enableFirst }); return; }
   const old = summary.pins.find(p => p.id === playlist.id);
   await writeOfflinePin({ owner, id: playlist.id, playlist: old?.playlist ?? { ...playlist, tracks: [] }, pending: playlist, error: "" });
+  await offlineSettings(owner, { deleted: (summary.settings.deleted ?? []).filter(id => !playlist.tracks.some(t => t.id === id)) });
   pendingPin = playlist; recent = null; await refreshOffline(); void drain();
 }
 export async function unpinOfflinePlaylist(id: string) {
@@ -145,21 +147,28 @@ async function drain() {
     if (explicit) requested.delete(explicit.id);
     const track = explicit ?? recent; if (!explicit) recent = null;
     const tracks = playlist?.tracks ?? (track ? [track] : []);
+    useOffline.setState({ progress: tracks.map(item => ({ id: item.id, title: item.title, status: "queued" as const, bytes: 0, total: null })) });
+    const progress = (id: string, patch: Partial<import("../stores/offline").DownloadProgress>) => {
+      if (stamp === generation && owner === offlineOwner()) useOffline.setState(s => ({ progress: s.progress.map(p => p.id === id ? { ...p, ...patch } : p) }));
+    };
     for (const item of tracks) {
       if (stamp !== generation || owner !== offlineOwner()) return;
       controller = new AbortController();
       if (!await readOfflineAudio(owner, item.id)) {
-        const blob = await fetchCompleteAudio(item.id, controller.signal);
+        progress(item.id, { status: "downloading" });
+        const blob = await fetchCompleteAudio(item.id, controller.signal, fetch, (bytes, total) => progress(item.id, { bytes, total }));
         if (stamp !== generation || owner !== offlineOwner()) return;
-        if (!await saveOfflineAudio(owner, item, blob, playlist ? 0 : Date.now())) return;
+        if (!await saveOfflineAudio(owner, item, blob, playlist ? 0 : Date.now())) throw new Error("budget");
+        progress(item.id, { status: "ready", bytes: blob.size, total: blob.size });
       } else if (!playlist) await touchOfflineAudio(owner, item.id);
+      progress(item.id, { status: "ready" });
       await refreshOffline();
     }
     if (playlist && stamp === generation) await writeOfflinePin({ owner, id: playlist.id, playlist, pending: null, error: "" });
   } catch (e) {
     if (stamp === generation) {
       const error = (e as Error).message === "budget" ? getT().offline.budgetFull : getT().offline.incomplete;
-      useOffline.setState({ error });
+      useOffline.setState(s => ({ error, progress: s.progress.map(p => p.status === "downloading" ? { ...p, status: "failed" as const } : p) }));
     }
   } finally {
     running = false; controller = null; useOffline.setState({ busy: false }); await refreshOffline(); notify();
@@ -168,3 +177,9 @@ async function drain() {
 }
 /** An interrupted pin remains checkpointed. Resumption is an explicit user action. */
 export const playlistRevision = (p: Playlist) => JSON.stringify([p.name, p.tracks.map(t => [t.id, t.title, t.artist])]);
+
+/** Only this browser installation is purged; no other device download receives a tombstone. */
+export async function deleteLocalAudio(id: string) {
+  const owner = offlineOwner(); if (!owner) return;
+  cancelOfflineDownloads(); await removeOfflineTrack(owner, id); await refreshOffline(); notify();
+}

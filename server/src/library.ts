@@ -185,6 +185,17 @@ async function addToPlaylist(pid: string, tracks: Track | Track[]): Promise<Play
   return p;
 }
 
+async function deleteTrack(id: string): Promise<Library> {
+  const lib = await getLibrary();
+  lib.favorites = lib.favorites.filter(t => t.id !== id);
+  lib.history = lib.history.filter(t => t.id !== id);
+  for (const playlist of lib.playlists) if (playlist.tracks.some(t => t.id === id)) {
+    playlist.tracks = playlist.tracks.filter(t => t.id !== id);
+    playlist.updatedAt = Math.max(Date.now(), playlist.updatedAt + 1);
+  }
+  await persist(); return lib;
+}
+
 async function removeFromPlaylist(pid: string, trackId: string): Promise<Playlist> {
   const lib = await load();
   const p = findPlaylist(lib, pid);
@@ -300,7 +311,7 @@ async function importLibrary(input: unknown, mode: "merge" | "replace"): Promise
   return result;
 }
 
-return { editPlaylist, useLibraryStorage, getLibrary, getTrackPage, addFavorite, addFavorites, removeFavorite, pushHistory, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, importLibrary };
+return { deleteTrack, editPlaylist, useLibraryStorage, getLibrary, getTrackPage, addFavorite, addFavorites, removeFavorite, pushHistory, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, importLibrary };
 }
 
 const sharedLibrary = createLibrary();
@@ -319,3 +330,5 @@ export const deletePlaylist = sharedLibrary.deletePlaylist;
 export const addToPlaylist = sharedLibrary.addToPlaylist;
 export const removeFromPlaylist = sharedLibrary.removeFromPlaylist;
 export const importLibrary = sharedLibrary.importLibrary;
+
+export const deleteTrack = sharedLibrary.deleteTrack;

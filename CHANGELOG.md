@@ -1,3 +1,15 @@
+# Approved source revision — 24 November 2026
+
+- Fix BUG-007/022 unlock/probe ordering, preserve failure classification and bounded recovery; retain ten-transition synthetic coverage and require physical Samsung acceptance.
+- Fix BUG-029–031 forward seek publication, stable account/browser identity with exclusive tab coordination, stale-output labels/disconnect notification and event-driven jam grant waiting. Retain explicit takeover and epochs.
+- Implement BUG-032 Favourites pin/update, bounded per-track progress, confirmed personal-library cascade and initiating-installation-only cached-audio deletion with late-write fencing.
+- Improve BUG-033/002 Google-first source mapping, per-collection supplementation, partial-source retention, anonymous original-ID fallback, queued/resolving progress and safe failure reasons; retain uncertain replacement review.
+- Implement BUG-034 shared appearance/language/normalization preferences through existing account API/heartbeat, worker migration `account-appearance-v1`, revision protection and no-echo subscriptions.
+- Preserve all existing fixes and operator configuration. Restore archive-lost executable metadata on the unchanged yt-dlp wrapper.
+- See TEST-RESULTS.md and current acceptance checklist; source tests are separate from live device/provider/Docker acceptance. No deployment performed.
+
+---
+
 ## 23 November 2026 — playback recovery, account normalization and shared offline Library
 
 - BUG-007/022: preserve notification play intent through bounded recovery; actual-ended/duplicate guards; three bounded nearest-first complete upcoming bodies; next-downloaded successor after exhausted automatic personal retries; better lifecycle evidence and classified origin failures.

@@ -3,7 +3,7 @@ import type { Library, Playlist, Track } from "./types";
 export const BUDGETS = [512, 1024, 2048] as const;
 export const MIB = 1024 * 1024;
 export const MAX_AUDIO = 64 * MIB;
-export interface OfflineSettings { normalization?: "quiet" | "standard" | "loud"; owner: string; enabled: boolean; budget: number; eligible: boolean; name: string; }
+export interface OfflineSettings { deleted?: string[]; normalization?: "quiet" | "standard" | "loud"; owner: string; enabled: boolean; budget: number; eligible: boolean; name: string; }
 export interface AudioEntry { owner: string; id: string; track: Track; bytes: number; played: number; }
 export interface OfflinePin { owner: string; id: string; playlist: Playlist; pending: Playlist | null; error: string; }
 export interface OfflineSummary { settings: OfflineSettings; entries: AudioEntry[]; pins: OfflinePin[]; bytes: number; }
@@ -64,7 +64,7 @@ export async function saveOfflineAudio(owner: string, track: Track, blob: Blob, 
     const [settings, entries, pins] = await Promise.all([
       request<OfflineSettings | undefined>(tx.objectStore("settings").get(owner)), rows<AudioEntry>(tx, "audio", owner), rows<OfflinePin>(tx, "pins", owner),
     ]);
-    if (!settings?.enabled) return false;
+    if (!settings?.enabled || settings.deleted?.includes(track.id)) return false;
     const protectedIds = new Set(pins.flatMap(p => [...p.playlist.tracks, ...(p.pending?.tracks ?? [])].map(t => t.id)));
     protectedIds.add(track.id);
     const previous = entries.find(e => e.id === track.id);
@@ -85,7 +85,10 @@ export async function touchOfflineAudio(owner: string, id: string) {
 }
 export async function writeOfflinePin(pin: OfflinePin) {
   if (pin.playlist.tracks.length > 5000 || (pin.pending?.tracks.length ?? 0) > 5000) throw new Error("limit");
-  return transaction(["pins"], "readwrite", async tx => {
+  return transaction(["pins", "settings"], "readwrite", async tx => {
+    const settings = await request<OfflineSettings | undefined>(tx.objectStore("settings").get(pin.owner));
+    const strip = (p: Playlist) => ({ ...p, tracks: p.tracks.filter(t => !settings?.deleted?.includes(t.id)) });
+    pin = { ...pin, playlist: strip(pin.playlist), pending: pin.pending ? strip(pin.pending) : null };
     const pins = await rows<OfflinePin>(tx, "pins", pin.owner);
     if (!pins.some(p => p.id === pin.id) && pins.length >= 100) throw new Error("limit");
     tx.objectStore("pins").put(pin);
@@ -127,4 +130,16 @@ export async function saveOfflineLibrary(owner: string, library: Library) {
 }
 export async function readOfflineLibrary(owner: string): Promise<Library | null> {
   return transaction(["library"], "readonly", async tx => (await request<{ library: Library } | undefined>(tx.objectStore("library").get(owner)))?.library ?? null);
+}
+
+export async function removeOfflineTrack(owner: string, id: string) {
+  return transaction(["settings", "audio", "blobs", "pins", "library"], "readwrite", async tx => {
+    const settings = await request<OfflineSettings | undefined>(tx.objectStore("settings").get(owner));
+    if (settings) tx.objectStore("settings").put({ ...settings, deleted: [...new Set([...(settings.deleted ?? []), id])].slice(-2000) });
+    tx.objectStore("audio").delete([owner, id]); tx.objectStore("blobs").delete([owner, id]);
+    const strip = (p: Playlist): Playlist => ({ ...p, tracks: p.tracks.filter(t => t.id !== id) });
+    for (const pin of await rows<OfflinePin>(tx, "pins", owner)) tx.objectStore("pins").put({ ...pin, playlist: strip(pin.playlist), pending: pin.pending ? strip(pin.pending) : null });
+    const cached = await request<{ owner: string; library: Library } | undefined>(tx.objectStore("library").get(owner));
+    if (cached) tx.objectStore("library").put({ owner, library: { favorites: cached.library.favorites.filter(t => t.id !== id), history: cached.library.history.filter(t => t.id !== id), playlists: cached.library.playlists.map(strip) } });
+  });
 }

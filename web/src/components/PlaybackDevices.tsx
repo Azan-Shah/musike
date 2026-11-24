@@ -12,12 +12,12 @@ export function PlaybackDevices() {
       <div className="flex flex-col gap-3 p-4">
         <p className="text-sm text-fg-2">{connected ? f.syncConnected : f.syncConnecting}</p>
         {error && <p role="alert" className="text-sm text-danger">{error}</p>}
-        {view?.transfer && <p role="status" className="text-sm text-fg-2">{f.transferWaiting}</p>}
+        {view?.transfer && !view.takeoverAvailable && <p role="status" className="text-sm text-fg-2">{f.transferWaiting}</p>}
         <ul className="flex flex-col gap-2">{view?.devices.map((device) => <li key={device.id} className="flex justify-between gap-3 rounded-[20px] bg-surface-2 p-3 text-sm">
           <span>{device.name}{device.id === view.deviceId ? ` · ${f.thisDevice}` : ""}</span>
-          <span className="text-fg-2">{device.id === view.active ? f.activeDevice : device.online ? f.deviceOnline : f.deviceOffline}</span>
+          <span className="text-fg-2">{!device.online ? f.deviceOffline : device.id === view.active ? f.activeDevice : f.deviceOnline}</span>
         </li>)}</ul>
-        <button type="button" className="button-secondary" disabled={!connected || !!view?.transfer || view?.active === view?.deviceId} onClick={() => void claimPlayback(!!view?.takeoverAvailable)}>{view?.takeoverAvailable ? f.takeover : f.playHere}</button>
+        <button type="button" className="button-secondary" disabled={!connected || !!view?.transfer && !view.takeoverAvailable || view?.active === view?.deviceId} onClick={() => void claimPlayback(!!view?.takeoverAvailable)}>{view?.takeoverAvailable ? f.takeover : f.playHere}</button>
       </div>
     </Modal>}
   </>;

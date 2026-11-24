@@ -56,3 +56,20 @@ test("concurrent offline writes serialize budget admission without evicting pins
     assert.ok(summary.entries.some(e => e.id === track(1).id));
   } finally { await purgeOfflineOwner(owner); }
 });
+
+test("individual deletion strips completed/pending pins and metadata, blocks late writes, and preserves other owners", async () => {
+  const { removeOfflineTrack, saveOfflineLibrary, readOfflineLibrary } = await import("../../web/src/lib/offlineStore.ts");
+  const owner = "delete-a"; const other = "delete-b"; const body = new Blob(["complete"], { type: "audio/mp4" });
+  try {
+    await offlineSettings(owner, { enabled: true }); await offlineSettings(other, { enabled: true });
+    await saveOfflineAudio(owner, track(1), body); await saveOfflineAudio(other, track(1), body);
+    await writeOfflinePin({ owner, id: "personal", playlist: playlist([1, 2]), pending: playlist([1, 3]), error: "" });
+    await saveOfflineLibrary(owner, { favorites: [track(1)], history: [track(1)], playlists: [playlist([1, 2])] });
+    await removeOfflineTrack(owner, track(1).id);
+    assert.equal(await readOfflineAudio(owner, track(1).id), null); assert.ok(await readOfflineAudio(other, track(1).id));
+    assert.equal(await saveOfflineAudio(owner, track(1), body), false, "an in-flight completion cannot re-create deleted audio");
+    await writeOfflinePin({ owner, id: "personal", playlist: playlist([1, 2]), pending: playlist([1, 3]), error: "" });
+    const summary = await offlineSummary(owner); assert.ok(summary.pins.every(p => [...p.playlist.tracks, ...(p.pending?.tracks ?? [])].every(t => t.id !== track(1).id)));
+    const library = await readOfflineLibrary(owner); assert.equal(library!.favorites.length, 0); assert.equal(library!.playlists[0]!.tracks.length, 1);
+  } finally { await purgeOfflineOwner(owner); await purgeOfflineOwner(other); }
+});

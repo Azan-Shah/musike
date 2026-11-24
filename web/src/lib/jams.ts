@@ -49,18 +49,20 @@ export async function jamAction(path: string, body?: unknown, method?: string) {
   return result;
 }
 export async function playJamHere() {
-  await claimPlayback();
+  await claimPlayback(!!usePlaybackDevices.getState().view?.takeoverAvailable);
   const view = useJam.getState().view; if (!view) return;
   // The output grant is not immediate: the active device must pause and acknowledge
   // the transfer first. Waiting here lets the grant land before this device binds
   // the jam — reading the view synchronously right after claim always saw the
   // transfer still pending and skipped the binding, freezing the jam.
-  let devices = usePlaybackDevices.getState().view;
-  for (let i = 0; i < 40 && devices && devices.active !== devices.deviceId; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    devices = usePlaybackDevices.getState().view;
-  }
-  if (!devices || devices.active !== devices.deviceId) { toast(getT().features.transferPending, "error"); return; }
+  const granted = () => { const d = usePlaybackDevices.getState().view; return !!d && d.active === d.deviceId && !d.transfer; };
+  if (!granted()) await new Promise<void>(resolve => {
+    const finish = () => { clearTimeout(timer); unsubscribe(); resolve(); };
+    const unsubscribe = usePlaybackDevices.subscribe(() => { if (granted()) finish(); });
+    const timer = setTimeout(finish, 12000);
+    if (granted()) finish();
+  });
+  if (!granted() || useJam.getState().view?.id !== view.id) { toast(getT().features.transferPending, "error"); return; }
   await accountRequest(`/api/jams/${view.id}/output`, {});
 }
 /** Polls are bounded to one in flight. Foreground reconciliation does not depend on a background timer surviving. */

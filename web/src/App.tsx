@@ -1,3 +1,4 @@
+import { startAccountPreferences } from "./lib/accountPreferences";
 import OfflineLibrary from "./views/OfflineLibrary";
 import { OfflineExperience } from "./views/OfflineLibrary";
 import { startJams } from "./lib/jams";
@@ -40,6 +41,7 @@ const Search = lazy(() => import("./views/Search"));
 const SHEET_HASH = `#${NOW_PLAYING_HASH}`;
 
 export default function App() {
+  useEffect(() => startAccountPreferences(), []);
   const offline = useSession(s => s.offline);
   return offline ? <OfflineExperience /> : <OnlineApp />;
 }

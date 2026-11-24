@@ -1167,3 +1167,44 @@ Verification: 165 tests pass, zero failed/skipped/cancelled; server/web TypeScri
 - A fresh diagnostic export covering a third-track death + unlock cycle would pin this down; reconcile against `playbackDiagnostics` events as before.
 
 Physical Samsung A07 acceptance for both the third-track defect and the unlock auto-resume regression remains OPEN.
+
+
+## 24 November 2026 — approved unresolved-issues source revision (Codex)
+
+The user selected all unresolved issues, answered the behavior questions, and explicitly authorized the build. Baseline: `musike-main (9).zip`. Original reports and historical status wording above are preserved. This dated disposition supersedes conflicting historical descriptions; source implementation and external acceptance remain separate.
+
+| Item | Current disposition |
+| --- | --- |
+| BUG-007 / BUG-022 | Recovery race resolved in source; Samsung A07 third-track/notification acceptance remains OPEN. |
+| BUG-029 | RESOLVED IN SOURCE: immediate forward/backward seek publication; existing jam SSE push retained; request/receive/apply and transfer timings added to bounded diagnostics. Physical latency acceptance pending. |
+| BUG-030 | RESOLVED IN SOURCE: account/browser installation identity under an exclusive Web Lock; same-installation tabs mirror/control its coordinator; refresh retains the row and starts a fenced epoch. Browser/OS names and available UA model retained; no rename feature. Physical refresh/autoplay acceptance pending. |
+| BUG-031 | RESOLVED IN SOURCE: a closed final SSE connection makes that output offline immediately and notifies other clients; stale explicit takeover remains fenced. Offline labels no longer hide behind the active designation. Jam grant waiting is subscription-driven with the existing bounded deadline. Half-open connections still require inbound freshness expiry. |
+| BUG-032 | IMPLEMENTED IN SOURCE: Favourites pin/download/update; paginated per-track bytes/status and overall counts; confirmed personal-library deletion plus initiating-installation-only cache purge and pending-write fencing. Physical storage/UI acceptance pending. |
+| BUG-033 / BUG-002 | Source omissions/recovery/progress improved for Google first and public playlist imports. Live provider/failed-library acceptance remains OPEN; zero unavailable tracks is not asserted. |
+| BUG-034 | IMPLEMENTED IN SOURCE: account-shared theme, language, normalization, accent/layout/Home preferences; field-patch merge and revision fencing; device storage, volume/mute and output ownership remain local to their existing boundaries. Physical propagation acceptance pending. |
+
+### Supplied diagnostics and playback repair
+
+The supplied 110-event export records hidden `player.ended_observed`/`player.ended` events and complete-body handoffs. The final requested video repeatedly fails preparation, then stalls with zero buffered bytes. Its final media error occurs immediately before `page.visible`/`page.resume`; `player.error` follows afterward. This does not establish Android process termination or a Media Session teardown root cause.
+
+Unlock previously attempted recovery only if an error already existed at visibility time. A still-running error probe could complete after that check and leave playback stuck. Foreground recovery intent now survives that race and bounded retry loads. Terminal error classification is retained for the recovery decision; an empty network source with media code 4 is eligible for bounded transport recovery rather than being declared a codec failure solely from that code. Two retries and one foreground recovery remain bounded; deliberate pause, skip, output loss and logout cancel stale work. If no complete successor remains, the UI pauses with an explanation while retaining the recoverable unlock path. A running media element can also resume its existing normalization context on foreground recovery. No new output element, wake lock, silent media, service-worker scheduler, native application or operator configuration change is introduced.
+
+### Device and seek behavior
+
+Use one persisted identity per account/browser installation when durable storage, Web Locks and BroadcastChannel are supported. Only the lock holder starts the real coordinator/audio output; other tabs forward allowlisted commands and mirror snapshots. Registration of a replacement document on the same active installation rotates the epoch and resets sequence/commands before resume. Re-registration never restores a grant over another installation. Storage/lock-unavailable browsers retain fenced document identities as a compatibility fallback. Names are honest best-effort browser/OS/available UA model labels; reduced user agents cannot supply a real model name.
+
+A clean SSE disconnect is positive evidence and exposes explicit takeover immediately. An apparently open but dead connection is not treated as live forever: inbound freshness still expires after 45 seconds, and server SSE writes do not renew it. No silent time-triggered takeover is added. A partitioned device's already-buffered sound cannot be remotely guaranteed silent. Transfer expiry is consistently ten seconds. Seek changes in either direction publish immediately rather than waiting for the five-second position checkpoint. Jam commands already push canonical snapshots through the account coordinator; polling remains a reconciliation fallback, with no new high-frequency hidden timer.
+
+### Downloads and deletion
+
+Favourites uses the existing explicit pin/update semantics, with virtual pin ID `favorites`; changes require Download updates. Download progress uses the existing single worker and shows bytes, known-size percentages, queued/downloading/ready/failed states, and completed/total tracks. Render at most 100 progress rows per page.
+
+Confirmed deletion removes a track from the authenticated owner's personal Favourites, history and all personal playlist memberships. It stops that track and strips queue occurrences on the initiating installation, and removes that installation's audio, completed/pending pin membership and offline library references. Other installations retain their downloaded audio. Bounded local deletion markers reject late body/pin completions; an explicit subsequent download/pin can restore eligibility. Other users' independent copies and shared server public-media cache are untouched. The existing Modal is reused; no new CSS token, inline style or DOM hook is introduced.
+
+### Import and preference changes
+
+Google renderer mapping now retains endpoint-only IDs and numeric durations, and keeps searchable song metadata when a provider omits its ID. Private playlist/likes success no longer suppresses per-collection public API supplementation. Partial continuation failures retain collected items with explicit incomplete reporting. Original-ID validation gains an anonymous bounded yt-dlp fallback after a Music-provider exception; Google credentials remain import-only. Provider failures remain reviewable even when only one resolution stage failed. Uncertain replacements are never silently accepted. Existing matched/durable report deltas remain, plus one resolving item and up to 100 queued items during matching. Public imports expose resolving state and safe failure reasons; permanently skipped entries keep a partial outcome rather than claiming every song imported. Original order, deduplication, checkpoints and bounded provider work remain.
+
+Account preferences extend the existing owner-scoped API and worker storage. Partial preference patches merge without overwriting unrelated fields; revisions increase under the existing per-owner lock. Server state applies without write-back loops, and older responses cannot replace a newer revision. Existing server values win at login; absent settings are established by an explicit save, not automatic upload of old device defaults. Offline edits are reverted and explained; auth-off stays local and does not open SQLite.
+
+Earlier resolved implementations remain retained. BUG-001's historical provider/token mechanism, BUG-004/006 live incident causality, and outstanding Google/Discord/device/Docker/operator acceptance are not newly certified. See TEST-RESULTS.md, REVISION-20261124-IMPACT.md, ARCHITECTURE.md section 10 and the current acceptance section. No deployment occurred.

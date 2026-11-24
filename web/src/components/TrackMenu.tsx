@@ -1,3 +1,7 @@
+import type { Track } from "../lib/types";
+import { Modal } from "./Modal";
+import { deleteLocalAudio } from "../lib/offlineDownloads";
+import { toast } from "../stores/ui";
 import {
   ArrowSquareOutIcon,
   HeartIcon,
@@ -45,6 +49,8 @@ export function TrackMenu() {
   const isMd = useMediaQuery(MD);
   const box = useRef<HTMLDivElement>(null);
   const t = useT();
+  const [deleteTarget, setDeleteTarget] = useState<Track | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [pos, setPos] = useState({ left: 0, top: 0 });
 
   useLayoutEffect(() => {
@@ -106,6 +112,7 @@ export function TrackMenu() {
           {t.trackMenu.removeFromPlaylist}
         </Item>
       )}
+      <Item danger icon={<TrashIcon size={18} />} onClick={run(() => setDeleteTarget(menu.track))}>{t.offline.deleteTrack}</Item>
       <div className="mx-3 my-1 h-px bg-line" />
       <Item
         icon={<ArrowSquareOutIcon size={18} />}
@@ -117,7 +124,7 @@ export function TrackMenu() {
   );
 
   return createPortal(
-    <AnimatePresence>
+    <><AnimatePresence>
       {menu && (
         <div className="fixed inset-0 z-50" onContextMenu={(e) => e.preventDefault()}>
           <motion.div
@@ -163,7 +170,23 @@ export function TrackMenu() {
           )}
         </div>
       )}
-    </AnimatePresence>,
+    </AnimatePresence>
+      <Modal open={!!deleteTarget} onClose={() => { if (!deleting) setDeleteTarget(null); }} title={t.offline.deleteTrack}>
+        <p className="text-sm text-fg-2">{deleteTarget?.title}</p>
+        <p className="mt-2 text-sm text-fg-2">{t.offline.deleteConfirm}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" className="button-secondary" disabled={deleting} onClick={() => setDeleteTarget(null)}>{t.common.cancel}</button>
+          <button type="button" className="h-11 rounded-full bg-danger px-6 text-sm font-semibold text-white" disabled={deleting} onClick={() => {
+            if (!deleteTarget || deleting) return;
+            const id = deleteTarget.id; setDeleting(true);
+            void useLibrary.getState().deleteTrack(id).then(async () => {
+              dispatchEvent(new CustomEvent("musike:track-deleted", { detail: id }));
+              await deleteLocalAudio(id); setDeleteTarget(null);
+            }).catch(e => toast(e.message, "error")).finally(() => setDeleting(false));
+          }}>{t.collection.delete}</button>
+        </div>
+      </Modal>
+    </>,
     document.body,
   );
 }

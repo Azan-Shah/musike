@@ -118,3 +118,24 @@ test("an individual request queued during a playlist download is retained and st
     assert.equal(f.h.requests.filter((url: string) => url.includes(track(2).id)).length, 1);
   } finally { release?.(); await f.cleanup(); }
 });
+
+test("download reports exact incremental bytes and Favourites retains explicit pin/update semantics", async () => {
+  const f = await harness();
+  try {
+    const seen: [number, number | null][] = [];
+    const response = () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1, 2])); controller.enqueue(new Uint8Array([3, 4, 5])); controller.close(); } }), { headers: { "content-type": "audio/mp4", "content-length": "5" } });
+    const body = await f.mod.fetchCompleteAudio(track(1).id, new AbortController().signal, async () => response(), (bytes: number, total: number | null) => seen.push([bytes, total]));
+    assert.equal(body.size, 5); assert.deepEqual(seen, [[2, 5], [5, 5]]);
+    await f.mod.setOfflineBudget(512, true);
+    const favourites = { id: "favorites", name: "Favourites", createdAt: 0, updatedAt: 0, tracks: [track(1)] };
+    await f.mod.pinOfflinePlaylist(favourites); await f.settled();
+    assert.equal((await offlineSummary(f.owner)).pins[0].pending, null);
+    assert.equal(f.mod.useOffline.getState().progress[0].status, "ready");
+    const before = f.h.requests.length;
+    const updated = { ...favourites, tracks: [track(1), track(2)] };
+    assert.notEqual(f.mod.playlistRevision(updated), f.mod.playlistRevision(favourites)); assert.equal(f.h.requests.length, before);
+    await f.mod.pinOfflinePlaylist(updated); await f.settled();
+    assert.equal((await offlineSummary(f.owner)).entries.length, 2);
+    assert.equal(f.h.requests.filter((url: string) => url.includes(track(1).id)).length, 1);
+  } finally { await f.cleanup(); }
+});

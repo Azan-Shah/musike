@@ -273,3 +273,37 @@ test("an exhausted automatic transition with no downloaded successor pauses, whi
     assert.equal(navigator.mediaSession.playbackState, "paused");
   } finally { await f.cleanup(); }
 });
+
+test("unlock during the final error probe resumes after the probe settles without overriding a deliberate pause", async () => {
+  const f = await harness(); const p = () => f.player.getState(); let release!: (value: unknown) => void;
+  try {
+    f.h.messages.offline = { noNextDownloaded: "No downloaded songs" };
+    p().setAutoRadio(false); p().playList([track(1), track(2), track(3)]); await f.tick();
+    Object.assign(f.document, { visibilityState: "hidden" });
+    const audio = f.h.elements[0]; audio.emit("ended"); await f.tick();
+    audio.emit("error"); await new Promise(r => setTimeout(r, 550)); await f.tick();
+    audio.emit("error"); await new Promise(r => setTimeout(r, 1050)); await f.tick();
+    f.h.errors = new Promise(resolve => { release = resolve; }); audio.emit("error"); await f.tick();
+    Object.assign(f.document, { visibilityState: "visible" }); f.document.dispatchEvent(new Event("visibilitychange"));
+    release({ message: "Network", failure: "network" }); await f.tick();
+    assert.equal(p().status, "playing", "visibility recovery must also handle an error that finishes after unlock");
+    assert.equal(p().index, 1); assert.equal(f.h.elements.length, 2, "reuse the existing audio and video elements");
+    f.h.errors = new Promise(resolve => { release = resolve; }); audio.emit("error"); await f.tick();
+    p().toggle(); release({ message: "Network", failure: "network" }); await f.tick();
+    assert.equal(p().status, "paused");
+  } finally { release?.({ message: "Cancelled", failure: "network" }); await f.cleanup(); }
+});
+
+test("ten hidden automatic complete-body transitions keep one output element and notification intent", async () => {
+  const f = await harness(); const p = () => f.player.getState();
+  try {
+    f.h.transport = async () => new Response("complete-body", { headers: { "content-type": "audio/mp4" } });
+    p().setAutoRadio(false); p().playList(Array.from({ length: 12 }, (_, index) => track(index + 1))); await f.tick();
+    Object.assign(f.document, { visibilityState: "hidden" });
+    for (let i = 1; i <= 10; i++) {
+      await f.tick(); f.h.elements[0].emit("ended"); await f.tick();
+      assert.equal(p().index, i); assert.equal(p().status, "playing"); assert.equal(navigator.mediaSession.playbackState, "playing");
+      assert.equal(f.h.elements.length, 2);
+    }
+  } finally { await f.cleanup(); }
+});

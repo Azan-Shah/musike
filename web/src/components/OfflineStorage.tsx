@@ -1,3 +1,5 @@
+import { useListPage } from "../hooks/useListPage";
+import { ListPager } from "./ListPager";
 import { useLibrary } from "../stores/library";
 import { useEffect, useState } from "react";
 import { useT } from "../i18n";
@@ -10,6 +12,7 @@ import type { Playlist } from "../lib/types";
 const size = (bytes: number) => `${(bytes / MIB).toFixed(1)} MiB`;
 export function OfflineStorage() {
   const t = useT(); const f = t.offline; const state = useOffline(); const offline = useSession(s => !!s.offline);
+  const progressPage = useListPage(state.progress, "download-progress");
   const [budget, setBudget] = useState(1024); const [working, setWorking] = useState(false);
   useEffect(() => { void refreshOffline(); const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("musike-offline") : null;
     if (channel) channel.onmessage = () => void refreshOffline();
@@ -31,6 +34,13 @@ export function OfflineStorage() {
     <p>{f.audioUsage}: {size(state.summary?.bytes ?? 0)} / {size(state.summary?.settings.budget ?? budget * MIB)}</p>
     <p>{f.siteUsage}: {state.siteUsage === null ? "—" : size(state.siteUsage)}</p><p className="text-xs text-fg-2">{f.siteNote}</p>
     {state.summary?.settings.enabled && <p className="text-xs text-fg-2">{state.persistent ? f.persistence : f.temporary}</p>}
+    {state.progress.length > 0 && <div role="status" className="flex flex-col gap-2">
+      <p>{f.progress}: {state.progress.filter(p => p.status === "ready").length}/{state.progress.length}</p>
+      <ul className="scroll-area max-h-48 overflow-auto">{progressPage.items.map(p => <li key={p.id} className="flex flex-wrap justify-between gap-2 border-b border-line py-2">
+        <span>{p.title}</span><span className="text-fg-2">{f[p.status]} · {size(p.bytes)}{p.total ? ` / ${size(p.total)} (${Math.min(100, Math.floor(p.bytes / p.total * 100))}%)` : ""}</span>
+      </li>)}</ul>
+      <ListPager {...progressPage} total={state.progress.length} />
+    </div>}
     {state.error && <p role="alert" className="text-danger">{state.error}</p>}
   </section>;
 }

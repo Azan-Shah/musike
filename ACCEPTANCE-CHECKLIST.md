@@ -1,3 +1,27 @@
+# Current acceptance — approved unresolved-issues revision, 24 November 2026
+
+Checked items below refer to automated fixtures/builds only. Historical checklists remain below.
+
+- [x] Baseline 165/165 tests; final full regression suite recorded in TEST-RESULTS.md.
+- [x] Actual player/synthetic media: unlock while final probe is pending, deliberate pause cancellation, exhausted-no-successor pause, and ten hidden complete-body transitions preserving one output element and notification intent.
+- [x] Actual browser coordinator modules/worker: two tabs share one installation/output; refresh handover keeps the row and rotates epoch; old epochs reject; another installation keeps its grant; closed SSE becomes offline and explicit takeover avoids failed acknowledgement wait.
+- [x] Same-account forward seek propagation completes inside the fixture's one-second threshold; jam canonical push/permissions/repeat/transfer regressions retained.
+- [x] Personal library deletion removes all own memberships/history/favourites, preserves other owners, strips local completed/pending pins/metadata, and rejects late audio/pin writes.
+- [x] Actual React DOM confirmation using existing Modal: cancellation makes no write; confirm makes one deletion and one local purge. Motion is mocked; this is not visual acceptance.
+- [x] Download exact incremental bytes/known totals; explicit Favourites pin/update retains completed bodies without duplicate download.
+- [x] Google source endpoint IDs/numeric duration/metadata-only rows; queued/resolving progress and provider failures with safe reasons; matching/origin/idempotence and public importer regressions retained.
+- [x] Account preference field merge/owner isolation/index access, backed-up/idempotent migration preserving normalization/revisions; browser no-echo, stale-response and offline-edit rejection fixtures.
+- [ ] Samsung A07 installed PWA, normal playlist/mobile data: at least ten automatic locked transitions, especially third track; notification/audio persistence; unlock during loading, retry and final probe; intentional pause must remain paused. Repeat Wi-Fi/Bluetooth and radio.
+- [ ] Physical two-device normal and jam seeking: target under one second awake/connected; capture request/receive/apply stages and audible timing. Test repeats, host/guest permissions and transfer during seeking.
+- [ ] Close/crash old output; verify offline label, explicit takeover and epoch fencing. Half-open/unreachable output must not claim proved silence; normal reachable transfer requires acknowledgement. Refresh current output and open several tabs without duplicate device rows/sound.
+- [ ] Favourites download/update/resume/cancel, unknown-size/failed progress, quota/budget/pins, and deletion while downloading/playing. Verify only initiating-installation audio is purged; remote downloaded bodies remain.
+- [ ] Real Google consent/import (focus), provider denied categories, playlists/likes/albums/history, partial continuation, ambiguous replacements and retry. Every unavailable/unresolved item/category must be visible; no unsupported zero-miss claim. Repeat public playlist import/dedup.
+- [ ] Change account appearance/language/normalization on A; B applies by heartbeat/reconnect; newer revisions win; offline edits cannot change server values; local volume/storage unaffected. Different accounts stay isolated.
+- [ ] Real desktop/phone visual/focus/scroll acceptance. Chromium launch in the workspace failed before page load with socket permission denied; no visual result is claimed.
+- [ ] Production Node 22 Docker build/startup, migration/backup/rollback and existing Discord/provider/tunnel acceptance, followed by operator demo approval before promotion. No deployment occurred.
+
+---
+
 # Current acceptance — approved source revision, 23 November 2026
 
 These checked items are source/fixture/build results. Older sections remain historical evidence.

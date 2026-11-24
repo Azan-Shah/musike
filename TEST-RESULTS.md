@@ -1,3 +1,28 @@
+# Validation — approved unresolved-issues source revision, 24 November 2026
+
+Environment: Node 24.22.3, repository-pinned pnpm 10.14.0 via Corepack. Production still targets Node 22 and needs the operator's Docker/runtime acceptance. Dependencies installed with the unchanged frozen lockfile.
+
+| Check | Actual result |
+| --- | --- |
+| `corepack pnpm install --frozen-lockfile` | PASS; pnpm 10.14.0, unchanged lockfile/dependency manifests. |
+| Uploaded baseline `corepack pnpm test` | 165 passed, zero failed/skipped/cancelled. Wrapper executable metadata restored before execution; content unchanged. |
+| Final `corepack pnpm test` | **179 passed, zero failed/skipped/cancelled**; 27.46 seconds in the final recorded run. |
+| `corepack pnpm typecheck` | PASS for server and web. |
+| `corepack pnpm build` | PASS, production web/PWA; 37 precache entries, 892.93 KiB. |
+| `corepack pnpm --filter @musike/server bundle` | PASS, server bundle. |
+| `git diff --check` | PASS. |
+| Production Chromium UI smoke | BLOCKED before page load: Chromium singleton `socket() failed: Operation not permitted`. No browser visual result claimed. |
+
+Fourteen added tests cover the new worker, server and browser behaviors: preference field merge/owner/index validation; migration backup/idempotence; browser preference no-echo/stale/offline behavior; stable registration/epoch protection; disconnected explicit takeover; two-tab lock/output/refresh behavior; personal library cascade; local audio/pin/metadata deletion and late-write fencing; download byte/Favourites update behavior; Google queued/resolving/reason reporting and renderer metadata; unlock during pending probe; ten hidden synthetic transitions; shared confirmation Modal cancellation/commit. Existing tests were extended for immediate forward seek and truthful partial import status.
+
+The ten-transition test uses actual player code with synthetic media; the tab test uses actual coordinator modules with a lock/channel fixture and real worker/database. The deletion DOM test uses actual React components and the existing Modal, with Motion mocked; it is not a screenshot/layout or physical-device test. The seek fixture asserts under one second locally, not physical or background network latency. Google source/resolution tests use injected sources/providers, not a live user account.
+
+Browser real-device audio/Media Session/AudioContext/autoplay, Samsung A07 normal playlist on mobile data across third/later tracks, Bluetooth/radio, physical normal/jam seek and takeover, Google/private API coverage, actual storage eviction, Discord SDK/profile, production Node 22 Docker and operator promotion remain unperformed. No credentials, provider account, live deployment or infrastructure configuration were used/changed. No zero-miss or uninterrupted OS-killed-page guarantee is asserted.
+
+Preserved: runtime manifests/lockfile, CSS content/tokens, Dockerfile, operator compose/environment content, yt-dlp wrapper content and original Hermes history. Only wrapper executable metadata is restored. See current ACCEPTANCE-CHECKLIST.md and DEPLOYMENT-NOTES.md.
+
+---
+
 # Current verification — approved source revision, 23 November 2026
 
 Baseline: `musike-main (8).zip`, SHA-256 `9bb76ecbf6423562b10cbf6af15229ec14bf954d4536913c46749476f3ee0128`, plus the separately supplied updated `HERMES_FOUND_BUGS.md`. Node v24.22.3; repository-pinned pnpm 10.14.0 through Corepack. Production continues to target Node 22.

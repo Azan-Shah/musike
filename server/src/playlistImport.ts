@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { fail, type Accounts } from "./accounts.js";
 import { sanitizeTrack } from "./library.js";
-import { TaskQueue } from "./taskQueue.js";
+import { TaskQueue, waitForSignal } from "./taskQueue.js";
 import { resolveStreams, ytdlpPlaylist } from "./ytdlp.js";
 import type { Track } from "./types.js";
 
@@ -54,14 +54,14 @@ export class PlaylistImport {
     if (!row) { if (id) throw fail(404, "Import not found"); return null; }
     const entries = await this.accounts.db.all("SELECT position,json,status FROM playlist_import_entries WHERE run_id=? AND position>=? ORDER BY position LIMIT 100", [row.id, offset]);
     return { id: row.id as string, status: row.status as string, destination: row.destination_id as string | null, summary: JSON.parse(row.summary) as Summary,
-      entries: entries.map(e => ({ position: e.position as number, title: JSON.parse(e.json)?.title || "Unavailable item", status: e.status as string })) };
+      entries: entries.map(e => ({ position: e.position as number, title: JSON.parse(e.json)?.title || "Unavailable item", status: e.status as string, reason: JSON.parse(e.json)?.importReason as string | undefined })) };
   }
   async resume(user: string, id: string) {
     return this.accounts.lock(`playlist-import:${user}`, async () => {
       const row = await this.status(user, id); if (this.jobs.has(id)) return { id };
       if (this.stopped || this.jobs.size >= 22) throw fail(503, "Import service is busy");
       if (await this.accounts.db.get("SELECT id FROM playlist_imports WHERE user_id=? AND status IN ('queued','running')", [user])) throw fail(409, "Another import is active");
-      await this.accounts.db.batch([{ sql: "UPDATE playlist_import_entries SET status='pending' WHERE run_id=? AND status='failed'", params: [id] },
+      await this.accounts.db.batch([{ sql: "UPDATE playlist_import_entries SET status='pending' WHERE run_id=? AND status IN ('failed','resolving')", params: [id] },
         { sql: "UPDATE playlist_imports SET status='queued' WHERE id=? AND user_id=?", params: [id, user] }]);
       this.launch(user, row!.id); return { id };
     });
@@ -86,25 +86,29 @@ export class PlaylistImport {
     summary.processed = summary.added = summary.already = summary.skipped = summary.failed = 0;
     for (const entry of entries) {
       signal.throwIfAborted(); let status = entry.status as string;
-      if (status === "pending") {
+      if (status === "pending" || status === "resolving") {
+        let reason = "";
+        await db.run("UPDATE playlist_import_entries SET status='resolving' WHERE run_id=? AND position=?", [id, entry.position]);
         try {
           const raw = JSON.parse(entry.json); const track = sanitizeTrack({ ...raw, artist: raw.channel || raw.uploader, thumb: raw.id ? `https://i.ytimg.com/vi/${raw.id}/hqdefault.jpg` : "", kind: "video" });
-          if (["private", "premium_only", "subscriber_only"].includes(raw.availability) || /^(\[Private video\]|\[Deleted video\])$/.test(track.title)) status = "skipped";
+          if (["private", "premium_only", "subscriber_only"].includes(raw.availability) || /^(\[Private video\]|\[Deleted video\])$/.test(track.title)) { status = "skipped"; reason = "unavailable-original"; }
           else {
             const playlist = (await library.getLibrary()).playlists.find(p => p.id === destination); if (!playlist) throw fail(404, "Destination playlist was removed");
             if (playlist.tracks.some(t => t.id === track.id)) status = "already";
             else {
-              const playable = await (this.options.resolve ? this.options.resolve(track, AbortSignal.any([signal, AbortSignal.timeout(30000)])) : resolveStreams(track.id, AbortSignal.any([signal, AbortSignal.timeout(30000)])).then(r => ({ ...track, title: r.title, duration: r.duration })));
+              const deadline = AbortSignal.any([signal, AbortSignal.timeout(30000)]);
+              const playable = await waitForSignal((this.options.resolve ? this.options.resolve(track, deadline) : resolveStreams(track.id, deadline).then(r => ({ ...track, title: r.title, duration: r.duration }))), deadline);
               signal.throwIfAborted(); await library.addToPlaylist(destination, playable); status = "added";
             }
           }
-        } catch (e) { if (signal.aborted) throw e; status = [400, 403, 404].includes((e as { status?: number }).status ?? 0) || (e as { statusCode?: number }).statusCode === 400 ? "skipped" : "failed"; }
-        await db.run("UPDATE playlist_import_entries SET status=? WHERE run_id=? AND position=?", [status, id, entry.position]);
+        } catch (e) { if (signal.aborted) throw e; reason = "provider-unavailable"; status = [400, 403, 404].includes((e as { status?: number }).status ?? 0) || (e as { statusCode?: number }).statusCode === 400 ? "skipped" : "failed"; }
+        if (status === "skipped" && !reason) reason = "invalid-or-unavailable-item";
+        await db.run("UPDATE playlist_import_entries SET status=?,json=? WHERE run_id=? AND position=?", [status, JSON.stringify({ ...JSON.parse(entry.json), importReason: reason || undefined }), id, entry.position]);
       }
       summary.processed++; summary[status as "added" | "already" | "skipped" | "failed"]++;
       await db.run("UPDATE playlist_imports SET summary=?,updated_at=? WHERE id=? AND user_id=?", [JSON.stringify(summary), this.accounts.now(), id, user]);
     }
-    await db.run("UPDATE playlist_imports SET status=?,updated_at=? WHERE id=? AND user_id=?", [summary.failed || summary.capped ? "partial" : "done", this.accounts.now(), id, user]);
+    await db.run("UPDATE playlist_imports SET status=?,updated_at=? WHERE id=? AND user_id=?", [summary.failed || summary.skipped || summary.capped ? "partial" : "done", this.accounts.now(), id, user]);
   }
   async close() { this.stopped = true; this.queue.close(); for (const j of this.jobs.values()) j.controller.abort(); await Promise.allSettled([...this.jobs.values()].map(j => j.work)); }
 }

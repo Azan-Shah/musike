@@ -135,7 +135,8 @@ test("public playlist import validates URLs and preserves order, partial failure
     const run = await service.start("alice", { url: "https://youtube.com/playlist?list=PLabcdefghij" }); let report = await terminal(service, "alice", run.id);
     assert.equal(report.status, "partial"); assert.equal(report.summary.added, 2); assert.equal(report.summary.skipped, 1); assert.equal(report.summary.failed, 1);
     await assert.rejects(service.status("bob", run.id), /not found/);
-    failed = false; await service.resume("alice", run.id); report = await terminal(service, "alice", run.id); assert.equal(report.status, "done");
+    failed = false; await service.resume("alice", run.id); report = await terminal(service, "alice", run.id); assert.equal(report.status, "partial");
+    assert.ok(report.entries.find(e => e.status === "skipped")?.reason, "permanently unavailable items remain explained, not a complete import");
     const p = (await f.a.library("alice").getLibrary()).playlists[0]!; assert.deepEqual(p.tracks.map(t => t.id), [track(1).id, track(3).id, track(2).id]); // resume appends, preserving completed edits
     const before = resolutions; const second = await service.start("alice", { url: "https://youtube.com/playlist?list=PLabcdefghij" }); await terminal(service, "alice", second.id); assert.equal(resolutions, before); assert.equal((await f.a.library("alice").getLibrary()).playlists.length, 1);
   } finally { await f.cleanup(); }

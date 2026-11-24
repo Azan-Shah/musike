@@ -115,6 +115,10 @@ export class Database {
         if(db.prepare('SELECT count(*) AS n FROM users').get().n) {const target=workerData.file+'.before-audio-normalization-'+require('node:crypto').randomUUID()+'.sqlite';db.prepare('VACUUM INTO ?').run(target);require('node:fs').chmodSync(target,0o600);}
         db.exec('BEGIN IMMEDIATE');try{db.exec(workerData.preferenceSchema);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
       }
+      if(!db.prepare("SELECT key FROM migrations WHERE key='account-appearance-v1'").get()){
+        if(db.prepare('SELECT count(*) AS n FROM users').get().n) {const target=workerData.file+'.before-account-appearance-'+require('node:crypto').randomUUID()+'.sqlite';db.prepare('VACUUM INTO ?').run(target);require('node:fs').chmodSync(target,0o600);}
+        db.exec('BEGIN IMMEDIATE');try{db.exec("ALTER TABLE account_preferences ADD COLUMN json TEXT NOT NULL DEFAULT '{}'; INSERT INTO migrations(key,value) VALUES('account-appearance-v1','1');");db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+      }
       const execute=({sql,params=[],mode='run'})=>{const q=db.prepare(sql);const value=q[mode](...params);
         return mode==='run'?{changes:Number(value.changes),lastInsertRowid:Number(value.lastInsertRowid)}:value;};
       parentPort.on('message',({id,operation,statements})=>{try{let result;

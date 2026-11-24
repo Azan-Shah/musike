@@ -11,8 +11,8 @@ export function registerPlayback(app: FastifyInstance, accounts: Accounts | null
     return { user: req.musikeUser.id, session: req.musikeSession };
   };
   app.post("/api/playback/devices", { bodyLimit: 1024 }, (req) => {
-    const { user, session } = owner(req); const b = (req.body ?? {}) as { clientId?: unknown; name?: unknown };
-    return sync.register(user, session, b.clientId, b.name);
+    const { user, session } = owner(req); const b = (req.body ?? {}) as { clientId?: unknown; name?: unknown; instanceId?: unknown };
+    return sync.register(user, session, b.clientId, b.name, b.instanceId);
   });
   app.post("/api/playback/sync", { bodyLimit: 2 * 1024 * 1024 }, (req) => {
     const { user, session } = owner(req); const b = req.body as Record<string, unknown>;
