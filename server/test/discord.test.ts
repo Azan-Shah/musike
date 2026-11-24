@@ -46,7 +46,7 @@ test("Discord identity cannot be attached to two Musike accounts", async () => {
     assert.equal((await f.discord.status("second")).connected, false);
   } finally { await f.cleanup(); }
 });
-test("Discord receives confirmed playback, pause clears activity, disconnect deletes credentials and logs exclude tokens", async () => {
+test("Discord receives confirmed playback, shows pause and repeat, stopping clears activity, disconnect deletes credentials and logs exclude tokens", async () => {
   const f = await fixture();
   try {
     const url = new URL((await f.discord.connect(f.user)).url); await f.discord.callback(f.user, url.searchParams.get("state"), "code");
@@ -57,8 +57,14 @@ test("Discord receives confirmed playback, pause clears activity, disconnect del
     assert.equal(body.activity.endsAt - body.activity.startedAt, 180); assert.ok(Math.abs(Date.now() / 1000 - 42 - body.activity.startedAt) < 3);
     assert.equal(body.activity.url, "https://music.youtube.com/watch?v=testtrack01");
     assert.equal((await f.discord.status(f.user)).ready, true);
-    f.discord.update(f.user, { ...snapshot, status: "paused" }); await new Promise((r) => setTimeout(r, 50));
-    assert.equal(JSON.parse(String(f.calls.filter((call) => call.url.endsWith("/presence")).at(-1)!.init!.body)).activity, null);
+    const last = () => JSON.parse(String(f.calls.filter((call) => call.url.endsWith("/presence")).at(-1)!.init!.body)).activity;
+    assert.equal(body.activity.playback, "playing"); assert.equal(body.activity.smallText, "");
+    f.discord.update(f.user, { ...snapshot, status: "paused" }); await new Promise((r) => setTimeout(r, 1100));
+    assert.deepEqual([last().playback, last().startedAt, last().endsAt, last().smallText, last().title], ["paused", 0, 0, "Paused", "Fixture title"]);
+    f.discord.update(f.user, { ...snapshot, repeat: "one" }); await new Promise((r) => setTimeout(r, 1100));
+    assert.deepEqual([last().playback, last().repeat, last().smallText, last().endsAt - last().startedAt], ["playing", "one", "On repeat", 180]);
+    f.discord.update(f.user, { ...snapshot, status: "idle" }); await new Promise((r) => setTimeout(r, 50));
+    assert.equal(last(), null);
     await f.discord.disconnect(f.user); assert.equal((await f.discord.status(f.user)).connected, false);
     assert.ok(f.calls.some((call) => call.init?.method === "DELETE")); assert.ok(f.calls.some((call) => call.url.endsWith("/revoke")));
     assert.doesNotMatch(JSON.stringify(f.logs), /fixture-access|fixture-refresh|authorization|Fixture title/);

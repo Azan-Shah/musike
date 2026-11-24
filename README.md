@@ -247,6 +247,19 @@ Server environment variables (all optional):
 | `MUSIKE_BIN_DIR` | | Private tools folder for server-managed media tools |
 | `MUSIKE_LANG` | `en` | YouTube Music language when a request doesn't say (the app always sends the chosen language) |
 | `MUSIKE_LOCATION` | `BR` | Region for YouTube Music results |
+| `MUSIKE_YOUTUBE_HISTORY` | on | Set to `off` to hide the optional "Sync plays to YouTube" setting |
+
+### Sync plays to YouTube (optional, accounts only)
+
+With accounts turned on, each user can link their own YouTube account in Account settings by pasting the `cookie` request header from a signed-in music.youtube.com tab (DevTools, Network, any request to music.youtube.com). Musike then sends the same playback and watch-time pings as the YouTube Music web player, so songs played in Musike appear in that account's YouTube Music history, feed its recommendations and count towards listening time and Recap.
+
+- A song goes into history after 10 seconds of real listening, so quick skips are left out.
+- Listening time is reported about every 40 seconds while playing, and again on pause, seek, skip and when the song ends. Paused time is not counted.
+- Each loop of a song on repeat counts as a new play, the same as on YouTube Music. The settings panel shows the last song added to history.
+- Cookies are stored encrypted in the account database and are never logged. If YouTube rejects them, Musike stops trying for 5 minutes; paste fresh cookies to fix it. Playback is never affected by a failed ping.
+- Tip from yt-dlp users: copy the cookies from a private window, then close the window without signing out, so the browser does not rotate them.
+
+This is unofficial and may break when YouTube changes its player, and it may go against YouTube's terms. Use it only with your own account.
 
 ## API
 

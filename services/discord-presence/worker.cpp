@@ -65,23 +65,37 @@ int main() {
         // Member list shows "♫ <artist>" like Spotify instead of "Listening to Musike".
         presence.SetStatusDisplayType(discordpp::StatusDisplayTypes::State);
         presence.SetDetails(activity->at("title").get<std::string>());
-        presence.SetState(activity->at("artist").get<std::string>());
+        bool paused = activity->value("playback", std::string("playing")) == "paused";
+        std::string repeat = activity->value("repeat", std::string("off"));
+        // The state line is also what the member list shows ("♫ millsage · Paused"), so the mode is visible without opening the profile.
+        std::string state = activity->at("artist").get<std::string>();
+        if (paused) state += " · Paused";
+        else if (repeat == "one") state += " · On repeat";
+        presence.SetState(state);
         std::string url = activity->value("url", "");
         if (!url.empty()) presence.SetDetailsUrl(url);
-        // Start + end = progress bar with elapsed and total time; start only = count-up timer.
-        discordpp::ActivityTimestamps timestamps;
+        // Playing: start + end = progress bar with elapsed and total time. Paused: no timestamps, so no running timer.
         int64_t start = activity->at("startedAt").get<int64_t>();
         int64_t end = activity->value("endsAt", static_cast<int64_t>(0));
-        timestamps.SetStart(start);
-        if (end > start) timestamps.SetEnd(end);
-        presence.SetTimestamps(timestamps);
+        if (!paused && start > 0) {
+          discordpp::ActivityTimestamps timestamps;
+          timestamps.SetStart(start);
+          if (end > start) timestamps.SetEnd(end);
+          presence.SetTimestamps(timestamps);
+        }
         std::string image = activity->value("artwork", "");
-        if (!image.empty()) {
+        std::string smallImage = activity->value("smallImage", "");
+        std::string smallText = activity->value("smallText", "");
+        if (!image.empty() || !smallImage.empty()) {
           discordpp::ActivityAssets assets;
-          assets.SetLargeImage(image);
-          std::string album = activity->value("album", "");
-          if (!album.empty()) assets.SetLargeText(album);
-          if (!url.empty()) assets.SetLargeUrl(url);
+          if (!image.empty()) {
+            assets.SetLargeImage(image);
+            std::string album = activity->value("album", "");
+            if (!album.empty()) assets.SetLargeText(album);
+            if (!url.empty()) assets.SetLargeUrl(url);
+          }
+          // Optional badge on the cover (pause or repeat icon); its text shows on hover.
+          if (!smallImage.empty()) { assets.SetSmallImage(smallImage); if (!smallText.empty()) assets.SetSmallText(smallText); }
           presence.SetAssets(assets);
         }
         client->UpdateRichPresence(presence, [](discordpp::ClientResult status) {

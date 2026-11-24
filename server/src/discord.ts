@@ -3,14 +3,22 @@ import type { Accounts } from "./accounts.js";
 import { fail } from "./accounts.js";
 import type { PlaybackSnapshot } from "./playbackSync.js";
 
-export interface DiscordOptions { clientId?: string; clientSecret?: string; redirectUri?: string; presenceUrl?: string; presenceKey?: string; transport?: typeof fetch; }
+export interface DiscordOptions { pausedIcon?: string; repeatIcon?: string; clientId?: string; clientSecret?: string; redirectUri?: string; presenceUrl?: string; presenceKey?: string; transport?: typeof fetch; }
 interface Tokens { access_token: string; refresh_token: string; expires_at: number; }
-type Activity = { title: string; artist: string; album: string; artwork: string; url: string; startedAt: number; endsAt: number } | null;
+type Activity = { title: string; artist: string; album: string; artwork: string; url: string; startedAt: number; endsAt: number;
+  playback: "playing" | "paused"; repeat: "off" | "all" | "one"; smallImage: string; smallText: string } | null;
+/** A paused card stays this long (the player sends no updates while paused), then the presence clears. */
+export const PAUSED_PRESENCE_MS = 5 * 60_000;
+/** The sidecar drops workers it hasn't heard from in 60 s, so unchanged cards are re-sent this often. */
+const REFRESH_MS = 30_000;
+/** Small-image badge: an art asset key from the Discord Developer Portal or an https URL. */
+const icon = (value: string | undefined) => value && (/^[a-z0-9_-]{1,64}$/.test(value) || /^https:\/\/\S{1,480}$/.test(value)) ? value : "";
 /** OAuth and encrypted credentials stay in the server. Only an internal authenticated service sees access tokens. */
 export class DiscordService {
   readonly configured: boolean;
   private clientId: string; private clientSecret: string; private redirectUri: string; private presenceUrl: string; private presenceKey: string;
-  private transport: typeof fetch; private latest = new Map<string, { activity: Activity; at: number; ready: boolean; timer?: ReturnType<typeof setTimeout> }>();
+  private transport: typeof fetch; private latest = new Map<string, { activity: Activity; at: number; sentAt: number; ready: boolean; timer?: ReturnType<typeof setTimeout> }>();
+  private pausedIcon: string; private repeatIcon: string;
   private timer: ReturnType<typeof setInterval>; private closed = false;
   private delivering = new Set<string>();
   constructor(readonly accounts: Accounts, options: DiscordOptions = {}, private log: (event: Record<string, unknown>) => void = () => {}) {
@@ -18,6 +26,7 @@ export class DiscordService {
     this.redirectUri = options.redirectUri ?? process.env.DISCORD_REDIRECT_URI ?? (accounts.origin ? `${accounts.origin}/api/discord/callback` : "");
     this.presenceUrl = options.presenceUrl ?? process.env.DISCORD_PRESENCE_URL ?? ""; this.presenceKey = options.presenceKey ?? process.env.DISCORD_PRESENCE_KEY ?? "";
     this.transport = options.transport ?? fetch;
+    this.pausedIcon = icon(options.pausedIcon ?? process.env.DISCORD_ICON_PAUSED); this.repeatIcon = icon(options.repeatIcon ?? process.env.DISCORD_ICON_REPEAT);
     this.configured = !!(this.clientId && this.clientSecret && this.redirectUri && this.presenceUrl && this.presenceKey.length >= 32);
     if (this.configured) {
       const redirect = new URL(this.redirectUri); const service = new URL(this.presenceUrl);
@@ -25,7 +34,11 @@ export class DiscordService {
         !["http:", "https:"].includes(service.protocol) || service.username || service.password || service.search || service.hash) throw new Error("Invalid Discord configuration");
     }
     this.timer = setInterval(() => {
-      for (const [user, state] of this.latest) if (Date.now() - state.at > 60000) { if (state.timer) clearTimeout(state.timer); this.latest.delete(user); void this.clear(user); }
+      for (const [user, state] of this.latest) {
+        const limit = state.activity?.playback === "paused" ? PAUSED_PRESENCE_MS : 60000;
+        if (Date.now() - state.at > limit) { if (state.timer) clearTimeout(state.timer); this.latest.delete(user); void this.clear(user); }
+        else if (state.activity && !state.timer && Date.now() - state.sentAt >= REFRESH_MS) void this.deliver(user);
+      }
     }, 15000); this.timer.unref();
   }
   async status(user: string) {
@@ -73,16 +86,21 @@ export class DiscordService {
     if (!this.configured || this.closed) return;
     const track = snapshot.queue[snapshot.index];
     let activity: Activity = null;
-    if (snapshot.status === "playing" && track) {
-      // Start and end together make Discord draw a Spotify-style progress bar (elapsed / total).
-      const startedAt = Math.floor(Date.now() / 1000 - snapshot.position);
+    const playing = snapshot.status === "playing";
+    if (track && (playing || snapshot.status === "paused")) {
       const known = [snapshot.duration, track.duration].find((value) => Number.isFinite(value) && value > 0);
       const duration = known ? Math.round(known) : 0;
+      // Playing: start and end together make Discord draw a Spotify-style progress bar. Paused: no timer, so the bar stops.
+      const startedAt = playing ? Math.floor(Date.now() / 1000 - snapshot.position) : 0;
+      const repeat = snapshot.repeat;
+      const smallImage = !playing ? this.pausedIcon : repeat === "one" ? this.repeatIcon : "";
+      const smallText = !playing ? "Paused" : repeat === "one" ? "On repeat" : repeat === "all" ? "Repeating queue" : "";
       activity = { title: track.title, artist: track.artist, album: track.album ?? "", artwork: track.art || track.thumb,
-        url: `https://music.youtube.com/watch?v=${track.id}`, startedAt, endsAt: duration ? startedAt + duration : 0 };
+        url: `https://music.youtube.com/watch?v=${track.id}`, startedAt, endsAt: playing && duration ? startedAt + duration : 0,
+        playback: playing ? "playing" : "paused", repeat, smallImage, smallText };
     }
     let state = this.latest.get(user);
-    if (!state) { if (this.latest.size >= 128) return; state = { activity, at: Date.now(), ready: false }; this.latest.set(user, state); }
+    if (!state) { if (this.latest.size >= 128) return; state = { activity, at: Date.now(), sentAt: 0, ready: false }; this.latest.set(user, state); }
     state.activity = activity; state.at = Date.now();
     if (!state.timer) state.timer = setTimeout(() => { state!.timer = undefined; void this.deliver(user); }, activity ? 1000 : 0);
   }
@@ -90,7 +108,7 @@ export class DiscordService {
     if (this.delivering.has(user)) return;
     this.delivering.add(user);
     try { await this.accounts.lock(`discord:${user}`, async () => {
-      const current = this.latest.get(user); if (!current || this.closed) return;
+      const current = this.latest.get(user); if (!current || this.closed) return; current.sentAt = Date.now();
       try {
         const row = await this.accounts.db.get("SELECT d.encrypted FROM discord_connections d JOIN users u ON u.id=d.user_id WHERE d.user_id=? AND u.status='approved'", [user]);
         if (!row) { this.latest.delete(user); await this.clear(user); return; }

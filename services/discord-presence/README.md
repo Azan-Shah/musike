@@ -24,6 +24,8 @@ Propose a private sidecar/container to Azan using the operator's existing deploy
 | DISCORD_REDIRECT_URI | Music server | Exact registered HTTPS callback; defaults to MUSIKE_PUBLIC_ORIGIN + /api/discord/callback |
 | DISCORD_PRESENCE_URL | Music server | Private HTTP(S) origin for the service, e.g. http://discord-presence:8091 |
 | DISCORD_PRESENCE_KEY | Both services | Matching random internal bearer secret, at least 32 characters |
+| DISCORD_ICON_PAUSED | Music server | Optional art asset key or https URL for the paused badge |
+| DISCORD_ICON_REPEAT | Music server | Optional art asset key or https URL for the repeat badge |
 | DISCORD_PRESENCE_MAX_USERS | Sidecar | Default 16 concurrent workers, bounded 1–64 |
 | PORT | Sidecar | Default 8091 |
 | DISCORD_SDK_WORKER | Sidecar | Default /app/discord-worker; testing override only |
@@ -32,11 +34,11 @@ Optional UI hides when configuration is absent. Unavailability must not stop pla
 
 ## Service boundary
 
-The internal HTTP API requires the service bearer key on **every route**, including `GET /health`. `POST /presence` accepts a server-authenticated Musike user UUID, application ID, OAuth access token and `{title,artist,album,artwork,url,startedAt,endsAt}` or null (`album`, `url`, `endsAt` optional). `DELETE /presence/:user` closes that user's SDK worker. Input is capped at 16 KiB, connections at 64, native output at a bounded line buffer and workers at configured capacity. SDK processes receive credentials through private stdin, never argv. Raw native stderr/provider messages are suppressed. Allowlisted worker state/result events go to stdout. No application log files are configured.
+The internal HTTP API requires the service bearer key on **every route**, including `GET /health`. `POST /presence` accepts a server-authenticated Musike user UUID, application ID, OAuth access token and `{title,artist,album,artwork,url,startedAt,endsAt,playback,repeat,smallImage,smallText}` or null (all but title, artist, artwork and startedAt optional). `DELETE /presence/:user` closes that user's SDK worker. Input is capped at 16 KiB, connections at 64, native output at a bounded line buffer and workers at configured capacity. SDK processes receive credentials through private stdin, never argv. Raw native stderr/provider messages are suppressed. Allowlisted worker state/result events go to stdout. No application log files are configured.
 
 Each user gets an isolated native SDK process. Tokens persist only encrypted in the main server's SQLite row using owner-bound AES-GCM; the service holds access tokens only in memory. The main server refreshes tokens and sends confirmed active-player state. The service expires unrenewed workers after 60–70 seconds; main-server stale state clears within 60–75 seconds. Browser close cannot be detected instantly after a network partition. Neither the server nor sidecar plays music.
 
-The SDK enum `Listening` is requested; verify how Discord renders it for this application. Do not claim Spotify's privileged integration or identical visual features. Title/artist/artwork/timer are the acceptance fields. The worker sends start and end timestamps so Discord can draw a progress bar, sets the status display type to State so the member list shows the artist, links the title and cover to YouTube Music, and uses the album name as cover hover text. Status display type and field URLs need Social SDK 1.5 or newer. SDK/library failures must remain explicit.
+The SDK enum `Listening` is requested; verify how Discord renders it for this application. Do not claim Spotify's privileged integration or identical visual features. Title/artist/artwork/timer are the acceptance fields. The worker sends start and end timestamps so Discord can draw a progress bar, sets the status display type to State so the member list shows the artist, links the title and cover to YouTube Music, and uses the album name as cover hover text. Status display type and field URLs need Social SDK 1.5 or newer. Playback state: while paused the card stays with no timer and the state line reads "artist · Paused"; with repeat-one it reads "artist · On repeat". A paused card clears after 5 minutes, and an unchanged card is re-sent every 30 seconds so the sidecar keeps the worker alive. For an icon badge on the cover, upload art assets in the Developer Portal (or use https image URLs) and set `DISCORD_ICON_PAUSED` and `DISCORD_ICON_REPEAT` on the music server. SDK/library failures must remain explicit.
 
 ## Required live proof
 

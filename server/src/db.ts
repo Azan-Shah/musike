@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS import_runs(id TEXT PRIMARY KEY,user_id TEXT NOT NULL
 CREATE INDEX IF NOT EXISTS import_runs_user_time ON import_runs(user_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS import_items(user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,source_id TEXT NOT NULL,
  kind TEXT NOT NULL,destination_id TEXT NOT NULL,PRIMARY KEY(user_id,source_id,kind));
+CREATE TABLE IF NOT EXISTS youtube_history_connections(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,encrypted TEXT NOT NULL,account TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL);
 `;
 
 type Value = string | number | null;

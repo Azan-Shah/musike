@@ -5,6 +5,7 @@ import { ListPager } from "./ListPager";
 import { useLibrary } from "../stores/library";
 import { accountRequest, useSession } from "../stores/session";
 import { DiscordSection } from "./DiscordSection";
+import { YouTubeHistorySection } from "./YouTubeHistorySection";
 import { logoutOfflineData } from "../lib/offlineDownloads";
 import { releasePlayback } from "../lib/playbackSync";
 import { PlaybackDevices } from "./PlaybackDevices";
@@ -22,6 +23,7 @@ export function AccountPanel() {
       {admin && <Suspense fallback={null}><AdminPanel /></Suspense>}</>}
     {session.google && <GooglePanel />}
     <DiscordSection />
+    <YouTubeHistorySection />
     <PlaybackDevices />
   </section>;
 }

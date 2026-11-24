@@ -35,7 +35,11 @@ const server = createServer(async (req, res) => {
       const album = typeof a.album === "string" ? a.album.slice(0, 128) : "";
       const url = typeof a.url === "string" && a.url.length <= 256 && a.url.startsWith("https://") ? a.url : "";
       const endsAt = Number.isSafeInteger(a.endsAt) && a.endsAt > a.startedAt ? a.endsAt : 0;
-      activity = { title: a.title.slice(0, 128), artist: a.artist.slice(0, 128), album, artwork: a.artwork, url, startedAt: a.startedAt, endsAt };
+      const playback = a.playback === "paused" ? "paused" : "playing";
+      const repeat = ["off", "all", "one"].includes(a.repeat) ? a.repeat : "off";
+      const smallImage = typeof a.smallImage === "string" && (/^[a-z0-9_-]{1,64}$/.test(a.smallImage) || /^https:\/\/\S{1,480}$/.test(a.smallImage)) ? a.smallImage : "";
+      const smallText = typeof a.smallText === "string" ? a.smallText.slice(0, 64) : "";
+      activity = { title: a.title.slice(0, 128), artist: a.artist.slice(0, 110), album, artwork: a.artwork, url, startedAt: a.startedAt, endsAt, playback, repeat, smallImage, smallText };
     }
     let session = sessions.get(data.user);
     if (!session) {

@@ -30,6 +30,8 @@ import { AudioCache, type AudioSourceOptions } from "./audioCache.js";
 import { acquireFileLease } from "./cacheBudget.js";
 import { registerPlayback } from "./playbackRoutes.js";
 import { registerDiscord } from "./discordRoutes.js";
+import { registerYouTubeHistory } from "./youtubeHistoryRoutes.js";
+import type { HistoryClientFactory } from "./youtubeHistory.js";
 import type { DiscordOptions } from "./discord.js";
 
 function videoId(params: unknown): string {
@@ -58,7 +60,7 @@ export interface RunningServer {
 }
 
 /** Builds API and static routes without opening a socket, for startup and injection tests. */
-export async function createApp(options: AccountOptions & { trustProxy?: string; google?: GoogleOptions; discord?: DiscordOptions; audio?: AudioSourceOptions; onPlaybackEvent?: (event: PlaybackFields) => void } = {}) {
+export async function createApp(options: AccountOptions & { trustProxy?: string; google?: GoogleOptions; discord?: DiscordOptions; youtubeHistory?: HistoryClientFactory; audio?: AudioSourceOptions; onPlaybackEvent?: (event: PlaybackFields) => void } = {}) {
   library.useLibraryStorage(fileStorage());
   const proxy = trustedProxies(options.trustProxy);
   const app = Fastify({ trustProxy: proxy.trust, logger: { level: process.env.LOG_LEVEL ?? "warn", serializers: { req: (request: { method?: string; url?: string; ip?: string }) => ({ method: request.method, path: request.url?.split("?")[0], ip: request.ip }) } } });
@@ -122,6 +124,8 @@ export async function createApp(options: AccountOptions & { trustProxy?: string;
   } }, proxy);
   const sync = registerPlayback(app, accounts);
   const discord = registerDiscord(app, accounts, sync, options.discord);
+  const youtubeHistory = registerYouTubeHistory(app, accounts, options.youtubeHistory);
+  if (sync && youtubeHistory) { const previous = sync.onChange; sync.onChange = (user, snapshot) => { previous?.(user, snapshot); youtubeHistory.observe(user, snapshot); }; }
   const jams = accounts && sync ? new Jams(accounts, sync) : null;
   const social = accounts && sync ? new Social(accounts, sync) : null;
   registerJams(app, jams); registerSocial(app, social); await jams?.recover();
@@ -132,7 +136,8 @@ export async function createApp(options: AccountOptions & { trustProxy?: string;
   if (accounts) accounts.onRevoke = async (user, deleting) => {
     await Promise.all([playlistImport?.cancelUser(user), google?.cancelUser(user)]);
     await jams?.revokeUser(user, deleting);
-    if (deleting) await Promise.allSettled([google?.disconnect(user), discord?.disconnect(user)]);
+    youtubeHistory?.forget(user);
+    if (deleting) await Promise.allSettled([google?.disconnect(user), discord?.disconnect(user), youtubeHistory?.disconnect(user)]);
     await sync?.dropUser(user);
   };
   google = accounts ? new GoogleImport(accounts, options.google) : null;
