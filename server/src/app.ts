@@ -301,6 +301,17 @@ export async function createApp(options: AccountOptions & { trustProxy?: string;
   // Library
 
   app.get("/api/library", (req) => userLibrary(req).getLibrary());
+  app.get("/api/library/summary", (req) => userLibrary(req).getSummary());
+  app.get("/api/library/favorites", async (req) => ({ favorites: await userLibrary(req).getFavorites() }));
+  app.get("/api/playlists/:pid", (req) => userLibrary(req).getPlaylist((req.params as { pid: string }).pid));
+  app.post("/api/library/playlist-membership", {
+    schema: { body: {
+      type: "object",
+      required: ["ids"],
+      additionalProperties: false,
+      properties: { ids: { type: "array", minItems: 1, maxItems: 500, items: { type: "string", pattern: "^[A-Za-z0-9_-]{11}$" } } },
+    } },
+  }, async req => ({ playlists: await userLibrary(req).playlistMembership((req.body as { ids: string[] }).ids) }));
 
   app.get("/api/library/tracks", {
     schema: { querystring: {

@@ -5,7 +5,18 @@ export function registerSocial(app: FastifyInstance, social: Social | null) {
   const owner = (req: FastifyRequest) => { if (!social || !req.musikeUser) throw fail(401, "Login required"); return req.musikeUser.id; };
   const id = (req: FastifyRequest) => (req.params as { id: string }).id;
   const body = (req: FastifyRequest) => { if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) throw fail(400, "Invalid request"); return req.body as Record<string, unknown>; };
-  app.get("/api/social", req => { const user = owner(req); const offset = Number((req.query as { offset?: string }).offset ?? 0); if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) throw fail(400, "Invalid share offset"); return social!.state(user, offset); });
+  const offsetOf = (req: FastifyRequest) => {
+    const offset = Number((req.query as { offset?: string }).offset ?? 0);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000) throw fail(400, "Invalid share offset");
+    return offset;
+  };
+  app.get("/api/social", req => social!.state(owner(req), offsetOf(req)));
+  app.get("/api/social/shares", req => {
+    const user = owner(req);
+    const limit = Number((req.query as { limit?: string }).limit ?? 30);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw fail(400, "Invalid share page size");
+    return social!.incomingShares(user, offsetOf(req), limit);
+  });
   app.post("/api/social/friends", { bodyLimit: 1024 }, req => { const user = owner(req); return social!.request(user, body(req).code); });
   app.post("/api/social/requests/:id", req => { const user = owner(req); return social!.respond(user, id(req), body(req).accept); });
   app.delete("/api/social/friends/:id", req => { const user = owner(req); return social!.removeFriend(user, id(req)); });

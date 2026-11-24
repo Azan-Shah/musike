@@ -2,6 +2,7 @@ import { CheckIcon, PlusIcon } from "@phosphor-icons/react";
 import { useEffect, useState, type FormEvent } from "react";
 import { useT, type Messages } from "../i18n";
 import { cn } from "../lib/format";
+import { api } from "../lib/api";
 import { useLibrary } from "../stores/library";
 import { useUi } from "../stores/ui";
 import { Artwork } from "./Artwork";
@@ -15,6 +16,7 @@ export function AddToPlaylistDialog() {
   const create = useLibrary((s) => s.createPlaylist);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+  const [membership, setMembership] = useState<{ tracks: typeof tracks; playlists: Set<string> }>();
   const many = !!tracks && tracks.length > 1;
   const t = useT();
 
@@ -24,6 +26,17 @@ export function AddToPlaylistDialog() {
       setName("");
     }
   }, [tracks]);
+
+  useEffect(() => {
+    if (!tracks?.length || !playlists.length) return;
+    const controller = new AbortController();
+    setMembership(undefined);
+    const ids = tracks.slice(0, 500).map(track => track.id);
+    void api.playlistMembership(ids, controller.signal).then(({ playlists }) => {
+      if (!controller.signal.aborted) setMembership({ tracks, playlists: new Set(playlists) });
+    }).catch(() => {}); // A failed lookup still allows the server to deduplicate the requested add.
+    return () => controller.abort();
+  }, [tracks, playlists]);
 
   const onCreate = async (e: FormEvent) => {
     e.preventDefault();
@@ -81,7 +94,7 @@ export function AddToPlaylistDialog() {
           </button>
           {playlists.map((p) => {
             // Done only when it already has every track being added.
-            const has = !!tracks && tracks.every((x) => p.tracks.some((t) => t.id === x.id));
+            const has = membership?.tracks === tracks && membership.playlists.has(p.id);
             return (
               <button
                 key={p.id}
@@ -94,10 +107,10 @@ export function AddToPlaylistDialog() {
                 }}
                 className={cn("flex items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-surface-3", has && "opacity-60")}
               >
-                <Artwork src={p.tracks[0]?.thumb} className="size-11 rounded-[10px]" />
+                <Artwork src={p.cover[0]?.thumb} className="size-11 rounded-[10px]" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{p.name}</span>
-                  <span className="block text-sm text-fg-2">{t.common.tracks(p.tracks.length)}</span>
+                  <span className="block text-sm text-fg-2">{t.common.tracks(p.trackCount)}</span>
                 </span>
                 {has && <CheckIcon size={18} className="text-accent-text" />}
               </button>

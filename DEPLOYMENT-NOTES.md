@@ -1,3 +1,23 @@
+# Current delivery — prebuilt performance release, 24 November 2026
+
+Extract `Musike_Performance_Release_20261124.zip` into a fresh directory. The complete source already includes the changes. Package contents and first start are documented in `START_HERE.md`. Stage the included `server/dist/server.mjs` and `web/dist/` together or rebuild both from the included source.
+
+Preserve existing application's data, instance secret, environment, compose files, media tools, and PWA browser storage. Stage against copied data. Auth-on applies additive `query-performance-v1` with a consistent mode-0600 backup before changing indexes. Auth-off keeps the JSON library. Library index and detail endpoints use the same account authorization.
+
+The previously delivered patch applies to the original upload as a review artifact for the first phase. This complete ZIP supersedes that installation method and adds the Library redesign and test fixes. Retain the previous paired server/web release for rollback. The prior server can open the database with the additional indexes.
+
+---
+
+# Current delivery — performance overlay, 24 November 2026
+
+Apply `Musike_Performance_Refactor_20261124.patch` to the source in `musike-main (10).zip`. Version the current source and take a consistent backup of application data and the instance secret before staging. Run the repository's tests, type checks, PWA build and server bundle with pinned pnpm 10.14.0.
+
+Stage the server and browser assets together. Auth-enabled startup applies additive migration `query-performance-v1`. Existing databases receive a mode-0600 SQLite backup beside the database before index creation. Check the marker and four indexes, then restart staging to confirm the migration skips on reopen. Auth-off uses the shared JSON path. Refresh installed PWA clients onto the new assets and preserve site data.
+
+Follow the current acceptance checklist before promotion. Keep the prior server and web build as a matched rollback pair. The prior server can use the database with the additive indexes. Restore a database backup only if needed and account for writes since backup. Keep one application process per live data directory throughout the rollout.
+
+---
+
 # Current delivery — approved unresolved-issues revision, 24 November 2026
 
 Use `Musike_Production_Fixes_20261124.zip` as a complete source tree, OR apply `Musike_Production_Fixes_20261124.patch` to the exact `musike-main (9).zip` baseline, SHA-256 `5271972bc2597149118925838fa3145eda01880f65ee61043e1aa2d473c8c7ca`. These are alternative methods. Do not reapply historical patches included as repository evidence. See `REVISION-20261124-IMPACT.md` for exact file/function scope. No deployment was performed.

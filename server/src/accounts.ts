@@ -17,6 +17,9 @@ export const emptyLibrary = () => ({ favorites: [], playlists: [], history: [] }
 export const phoneOf = malaysianPhone;
 export function cookies(header = "") { return Object.fromEntries(header.split(";").map((part) => part.trim().split("=")).filter(([key, value]) => key && value)); }
 
+// The cutoff is NULL until 1,000 rows exist, so a small audit table needs no trim.
+const trimAudit = "DELETE FROM audit WHERE id < (SELECT id FROM audit ORDER BY id DESC LIMIT 1 OFFSET 999)";
+
 export class Accounts {
   readonly db: Database;
   readonly box: ReturnType<typeof secretBox>;
@@ -136,8 +139,10 @@ export class Accounts {
   }
   async audit(actor: string | null, action: string, target: string | null, ip: string, level = "info") {
     this.options.onAudit?.({ event: "audit", actor, action, target, ip, level });
-    await this.db.run("INSERT INTO audit(at,actor,action,target,ip,level) VALUES(?,?,?,?,?,?)", [this.now(), actor, action, target, ip, level]);
-    await this.db.run("DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT 1000)");
+    await this.db.batch([
+      { sql: "INSERT INTO audit(at,actor,action,target,ip,level) VALUES(?,?,?,?,?,?)", params: [this.now(), actor, action, target, ip, level] },
+      { sql: trimAudit },
+    ]);
   }
   async requestOtp(input: { phone?: unknown; invite?: unknown; remember?: boolean }, ip: string) {
     const phone = phoneOf(input.phone);
@@ -279,7 +284,7 @@ export class Accounts {
         ...(phone !== user.phone ? [{ sql: "DELETE FROM otps WHERE phone IN (?,?)", params: [user.phone, phone] },
           { sql: "DELETE FROM invites WHERE phone IN (?,?) AND used_by IS NULL", params: [user.phone, phone] }] : []),
         { sql: "INSERT INTO audit(at,actor,action,target,ip) VALUES(?,?,'admin.user.update',?,?)", params: [this.now(), actor, id, ip] },
-        { sql: "DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT 1000)" },
+        { sql: trimAudit },
       ]);
       this.options.onAudit?.({ event: "audit", actor, action: "admin.user.update", target: id, ip, level: "info" });
       return this.db.get<User>("SELECT id,phone,name,role,status,last_seen FROM users WHERE id=?", [id]);
@@ -302,7 +307,7 @@ export class Accounts {
         { sql: "DELETE FROM invites WHERE created_by=? OR used_by=? OR phone=?", params: [id, id, user.phone] },
         { sql: "DELETE FROM users WHERE id=?", params: [id] },
         { sql: "INSERT INTO audit(at,actor,action,target,ip) VALUES(?,?,'admin.user.delete',?,?)", params: [this.now(), actor, id, ip] },
-        { sql: "DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT 1000)" },
+        { sql: trimAudit },
       ]);
       this.libraries.delete(id);
       this.options.onAudit?.({ event: "audit", actor, action: "admin.user.delete", target: id, ip, level: "info" });

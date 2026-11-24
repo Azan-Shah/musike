@@ -1,12 +1,12 @@
 import { useListPage } from "../hooks/useListPage";
 import { ListPager } from "./ListPager";
-import { useLibrary } from "../stores/library";
-import { useEffect, useState } from "react";
+import { syncOfflineLibrary } from "../stores/library";
+import { useEffect, useMemo, useState } from "react";
 import { useT } from "../i18n";
 import { useOffline } from "../stores/offline";
 import { useSession } from "../stores/session";
 import { BUDGETS, MIB } from "../lib/offlineStore";
-import { cancelOfflineDownloads, clearOfflineRecents, pinOfflinePlaylist, playlistRevision, refreshOffline, setOfflineBudget, snapshotOfflineLibrary, unpinOfflinePlaylist } from "../lib/offlineDownloads";
+import { cancelOfflineDownloads, clearOfflineRecents, pinOfflinePlaylist, playlistRevision, refreshOffline, setOfflineBudget, unpinOfflinePlaylist } from "../lib/offlineDownloads";
 import type { Playlist } from "../lib/types";
 
 const size = (bytes: number) => `${(bytes / MIB).toFixed(1)} MiB`;
@@ -19,15 +19,15 @@ export function OfflineStorage() {
     return () => channel?.close();
   }, []);
   useEffect(() => { if (state.summary) setBudget(state.summary.settings.budget / MIB); }, [state.summary?.settings.budget]);
-  const run = async (work: () => Promise<unknown>) => { setWorking(true); try { await work(); const library = useLibrary.getState(); if (!offline && library.status === "ready") await snapshotOfflineLibrary({ favorites: library.favorites, playlists: library.playlists, history: library.history }); } catch { useOffline.setState({ error: f.storageUnavailable }); } finally { setWorking(false); } };
-  return <section className="my-4 flex flex-col gap-3 rounded-2xl bg-surface-2 p-4 text-sm" aria-label={f.title}>
+  const run = async (work: () => Promise<unknown>) => { setWorking(true); try { await work(); } catch { useOffline.setState({ error: f.storageUnavailable }); } finally { setWorking(false); } };
+  return <section className="my-4 flex flex-col gap-3 rounded-panel bg-surface-2 p-4 text-sm" aria-label={f.title}>
     <h2 className="font-semibold">{f.title}</h2>
     <p className="text-fg-2">{f.notice}</p>
     <label className="flex flex-wrap items-center gap-3">{f.budget}<select className="h-11 rounded-full bg-surface-1 px-4 ring-1 ring-line-strong" value={budget} disabled={working || offline} onChange={e => {
       const mib = Number(e.target.value); setBudget(mib); if (state.summary?.settings.enabled) void run(() => setOfflineBudget(mib, true));
     }}>{BUDGETS.map(n => <option value={n} key={n}>{n === 512 ? "512 MiB" : `${n / 1024} GiB`}</option>)}</select></label>
     <div className="flex flex-wrap gap-2">
-      <button type="button" className="button-secondary" disabled={working || offline} onClick={() => void run(() => setOfflineBudget(budget, !state.summary?.settings.enabled))}>{state.summary?.settings.enabled ? f.disable : f.enable}</button>
+      <button type="button" className="button-secondary" disabled={working || offline} onClick={() => void run(async () => { const enabled = !state.summary?.settings.enabled; await setOfflineBudget(budget, enabled); if (enabled) await syncOfflineLibrary(); })}>{state.summary?.settings.enabled ? f.disable : f.enable}</button>
       <button type="button" className="button-secondary" disabled={working} onClick={() => void run(clearOfflineRecents)}>{f.clear}</button>
       {state.busy && <button type="button" className="button-secondary" onClick={() => cancelOfflineDownloads()}>{f.cancel}</button>}
     </div>
@@ -45,17 +45,25 @@ export function OfflineStorage() {
   </section>;
 }
 export function OfflinePlaylistButton({ playlist }: { playlist: Playlist }) {
-  const f = useT().offline; const state = useOffline(); const offline = useSession(s => !!s.offline); const [working, setWorking] = useState(false);
+  const f = useT().offline;
+  const summary = useOffline(s => s.summary);
+  const busy = useOffline(s => s.busy);
+  const offline = useSession(s => !!s.offline);
+  const [working, setWorking] = useState(false);
   useEffect(() => { void refreshOffline(); }, [playlist.id]);
-  const pin = state.summary?.pins.find(p => p.id === playlist.id);
-  const ids = new Set(state.summary?.entries.map(e => e.id));
+  const pin = summary?.pins.find(p => p.id === playlist.id);
+  const entries = summary?.entries;
   const target = pin?.pending ?? playlist;
-  const count = target.tracks.filter(t => ids.has(t.id)).length;
-  const updated = pin && !pin.pending && playlistRevision(pin.playlist) !== playlistRevision(playlist);
+  const count = useMemo(() => {
+    if (!pin) return 0;
+    const ids = new Set(entries?.map(e => e.id));
+    return target.tracks.reduce((n, track) => n + Number(ids.has(track.id)), 0);
+  }, [entries, pin, target.tracks]);
+  const updated = useMemo(() => pin && !pin.pending && playlistRevision(pin.playlist) !== playlistRevision(playlist), [pin, playlist]);
   const ready = pin && !pin.pending && count === target.tracks.length;
   const run = async (work: () => Promise<void>) => { setWorking(true); try { await work(); } catch { useOffline.setState({ error: f.incomplete }); } finally { setWorking(false); } };
   return <div className="flex flex-wrap items-center gap-2 text-sm">
-    <button type="button" className="button-secondary" disabled={working || state.busy || offline || !playlist.tracks.length} onClick={() => void run(() => pinOfflinePlaylist(playlist))}>
+    <button type="button" className="button-secondary" disabled={working || busy || offline || !playlist.tracks.length} onClick={() => void run(() => pinOfflinePlaylist(playlist))}>
       {updated ? f.update : pin?.pending ? f.resume : ready ? f.ready : f.download}
     </button>
     {pin && <><span className="text-fg-2" role="status">{updated ? f.updatesAvailable : ready ? f.ready : f.pending} · {count}/{target.tracks.length}</span>

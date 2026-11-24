@@ -10,7 +10,6 @@ import type { PlaybackSnapshot } from "../src/playbackSync.js";
 
 const COOKIE = "SAPISID=fixture-sapisid-not-real; __Secure-3PAPISID=fixture-3p-not-real; SID=fixture-sid";
 const song = (id: string, duration = 240) => ({ id, title: `Song ${id}`, artist: "Fixture artist", duration, thumb: "", art: "", kind: "song" as const });
-const settle = async () => { for (let n = 0; n < 10; n++) await new Promise((resolve) => setImmediate(resolve)); };
 
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "musike-ythistory-")); const old = config.dataDir; config.dataDir = dir;
@@ -27,7 +26,13 @@ async function fixture() {
   const snap = (track: ReturnType<typeof song> | null, position: number, status: PlaybackSnapshot["status"] = "playing", repeat: PlaybackSnapshot["repeat"] = "off"): PlaybackSnapshot =>
     ({ queue: track ? [track] : [], original: null, index: 0, position, duration: track?.duration ?? 0, status, shuffle: false, repeat, autoRadio: false });
   /** Advances the clock and position together, as the player does while playing. */
-  const at = async (seconds: number, snapshot: PlaybackSnapshot) => { clock = 1_000_000 + seconds * 1000; history.observe(user, snapshot); await settle(); await history.flush(); };
+  const at = async (seconds: number, snapshot: PlaybackSnapshot) => {
+    clock = 1_000_000 + seconds * 1000;
+    history.observe(user, snapshot);
+    // The worker processes this query after observe's pending link lookup.
+    await accounts.db.get("SELECT 1");
+    await history.flush();
+  };
   return { accounts, user, history, calls, cookies, logs, snap, at, setReject: (value: boolean) => { reject = value; },
     cleanup: async () => { await history.close(); await accounts.close(); config.dataDir = old; await rm(dir, { recursive: true, force: true }); } };
 }

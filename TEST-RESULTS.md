@@ -1,3 +1,22 @@
+# Validation — prebuilt performance release, 24 November 2026
+
+| Check | Result |
+| --- | --- |
+| Runtime and package manager | Node 22.23.5 and pnpm 10.14.0 |
+| `pnpm test` | 189 passed, zero failed, skipped or cancelled |
+| `pnpm typecheck` | Server and web passed |
+| `pnpm build` | Web/PWA build passed, 37 service-worker precache entries |
+| `pnpm --filter @musike/server bundle` | Standalone server bundle compiled |
+| Extracted ZIP, auth off | Server started on loopback using synthetic JSON. Health, Library summary, full snapshot, selected playlist, Favorites, HTML, JS, PWA manifest and service worker passed |
+| Extracted ZIP, auth on | Server started on loopback with disposable SQLite data. Auth wall, auth probe, query migration and PWA assets passed |
+| Verification after extraction | All files checked against release SHA-256 manifest, and executable wrapper mode retained |
+
+The process fixture runs its local print-only child without Node's environment proxy. The browser lifecycle fixture keeps awaited finite timers live and clears them at teardown. The full Node 22 run exercises both changes. The YouTube history fixture waits for its queued SQLite lookup before advancing the test clock.
+
+The compiled smoke used local endpoints and temporary fixture data. Browser rendering, physical device behavior, live provider playback and Docker deployment remain staging checks.
+
+---
+
 # Validation — approved unresolved-issues source revision, 24 November 2026
 
 Environment: Node 24.22.3, repository-pinned pnpm 10.14.0 via Corepack. Production still targets Node 22 and needs the operator's Docker/runtime acceptance. Dependencies installed with the unchanged frozen lockfile.

@@ -6,10 +6,11 @@ import { create } from "zustand";
 export interface SessionUser { id: string; name: string; phone: string; role: "admin" | "user"; status: string; }
 export interface SessionInfo { enabled: boolean; user: SessionUser | null; google: boolean; admin?: boolean; offline?: boolean; preferences?: { normalization: Normalization; revision?: number; theme?: "dark" | "light"; language?: "en" | "pt-BR"; appearance?: Partial<import("./appearance").Appearance> }; }
 export const useSession = create<SessionInfo>(() => ({ enabled: false, user: null, google: false }));
-export async function accountRequest<T>(url: string, body?: unknown, method?: string): Promise<T> {
+export async function accountRequest<T>(url: string, body?: unknown, method?: string, signal?: AbortSignal): Promise<T> {
   if (useSession.getState().offline && url !== "/api/auth/me") throw new Error(getT().offline.onlineRequired);
-  const response = await fetch(url, { credentials: "same-origin", redirect: "manual", signal: AbortSignal.timeout(20_000), method: method ?? (body === undefined ? "GET" : "POST"),
-    headers: { "content-type": "application/json", "x-musike-request": "1" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).catch(() => { throw Object.assign(new Error(getT().features.connectionFailed), { network: true }); });
+  const timeout = AbortSignal.timeout(20_000);
+  const response = await fetch(url, { credentials: "same-origin", redirect: "manual", signal: signal ? AbortSignal.any([signal, timeout]) : timeout, method: method ?? (body === undefined ? "GET" : "POST"),
+    headers: { "content-type": "application/json", "x-musike-request": "1" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).catch(() => { if (signal?.aborted) throw signal.reason; throw Object.assign(new Error(getT().features.connectionFailed), { network: true }); });
   if (response.status === 401) window.dispatchEvent(new Event("musike:unauthorized"));
   const failure = responseFailure(response);
   if (failure && !response.headers.get("content-type")?.includes("json")) {
@@ -20,6 +21,7 @@ export async function accountRequest<T>(url: string, body?: unknown, method?: st
   try {
     data = await response.json();
   } catch {
+    if (signal?.aborted) throw signal.reason;
     await response.body?.cancel(); recordPlayback("account.error", { reason: "unexpected_response", status: response.status });
     throw new Error(getT().features.unexpectedResponse);
   }

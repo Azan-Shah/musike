@@ -8,22 +8,63 @@ const permission = (value: unknown) => { if (!["viewer", "editor"].includes(valu
 export class Social {
   constructor(readonly accounts: Accounts, private sync: PlaybackSync) {}
   private async friend(user: string, other: string) { const [a, b] = [user, other].sort(); return !!await this.accounts.db.get("SELECT a FROM friendships WHERE a=? AND b=?", [a!, b!]); }
+  async incomingShares(user: string, offset: number, limit: number) {
+    const rows = await this.accounts.db.all<{
+      id: string; owner_id: string; owner_name: string; playlist_id: string; can_edit: number;
+    }>(`
+      WITH grants AS (
+        SELECT share_id, permission FROM playlist_grants WHERE user_id=?
+        UNION ALL
+        SELECT g.share_id, g.permission FROM group_members m
+        JOIN playlist_group_grants g ON g.group_id=m.group_id WHERE m.user_id=?
+      )
+      SELECT s.id, s.owner_id, u.name AS owner_name, s.playlist_id,
+             MAX(grants.permission='editor') AS can_edit
+      FROM grants JOIN shared_playlists s ON s.id=grants.share_id
+      JOIN users u ON u.id=s.owner_id
+      WHERE s.owner_id<>? AND u.status='approved'
+      GROUP BY s.id
+      ORDER BY s.id LIMIT ? OFFSET ?
+    `, [user, user, user, limit + 1, offset]);
+
+    // Read each owner's live snapshot once, including changes that have not yet flushed to SQLite.
+    const byOwner = new Map<string, Map<string, { name: string; tracks: number }>>();
+    const shares = [];
+    for (const row of rows.slice(0, limit)) {
+      let playlists = byOwner.get(row.owner_id);
+      if (!playlists) {
+        const library = await this.accounts.library(row.owner_id).getLibrary();
+        playlists = new Map(library.playlists.map(p => [p.id, { name: p.name, tracks: p.tracks.length }]));
+        byOwner.set(row.owner_id, playlists);
+      }
+      const playlist = playlists.get(row.playlist_id);
+      if (playlist) shares.push({ id: row.id, ...playlist, owner: { id: row.owner_id, name: row.owner_name }, permission: row.can_edit ? "editor" : "viewer" });
+    }
+    return { shareOffset: offset, hasMore: rows.length > limit, shares };
+  }
+
+  private async friendCode(user: string) {
+    const db = this.accounts.db;
+    const current = await db.get<{ code: string }>("SELECT code FROM friend_codes WHERE user_id=?", [user]);
+    if (current) return current.code;
+    const inserted = await db.get<{ code: string }>("INSERT INTO friend_codes VALUES(?,?) ON CONFLICT(user_id) DO NOTHING RETURNING code",
+      [user, randomBytes(12).toString("base64url")]);
+    return inserted?.code ?? (await db.get<{ code: string }>("SELECT code FROM friend_codes WHERE user_id=?", [user]))!.code;
+  }
+
   async state(user: string, offset = 0) {
     const db = this.accounts.db;
-    await db.run("INSERT INTO friend_codes VALUES(?,?) ON CONFLICT(user_id) DO NOTHING", [user, randomBytes(12).toString("base64url")]);
     const [code, preferences, friends, requests, groups, owned, incoming] = await Promise.all([
-      db.get("SELECT code FROM friend_codes WHERE user_id=?", [user]), db.get("SELECT show_online,show_track FROM social_preferences WHERE user_id=?", [user]),
+      this.friendCode(user), db.get("SELECT show_online,show_track FROM social_preferences WHERE user_id=?", [user]),
       db.all("SELECT u.id,u.name,coalesce(p.show_online,0) AS show_online,coalesce(p.show_track,0) AS show_track FROM friendships f JOIN users u ON u.id=CASE WHEN f.a=? THEN f.b ELSE f.a END LEFT JOIN social_preferences p ON p.user_id=u.id WHERE (f.a=? OR f.b=?) AND u.status='approved' ORDER BY u.name,u.id LIMIT 200", [user, user, user]),
       db.all("SELECT r.sender,r.recipient,u.name FROM friend_requests r JOIN users u ON u.id=CASE WHEN r.sender=? THEN r.recipient ELSE r.sender END WHERE r.sender=? OR r.recipient=? ORDER BY r.created_at DESC LIMIT 100", [user, user, user]),
       db.all("SELECT g.id,g.owner_id,g.name FROM group_members m JOIN social_groups g ON g.id=m.group_id WHERE m.user_id=? ORDER BY g.name LIMIT 50", [user]),
       db.all("SELECT id,playlist_id FROM shared_playlists WHERE owner_id=? LIMIT 200", [user]),
-      db.all("SELECT id FROM (SELECT s.id FROM playlist_grants p JOIN shared_playlists s ON s.id=p.share_id WHERE p.user_id=? AND s.owner_id<>? UNION SELECT s.id FROM group_members m JOIN playlist_group_grants g ON g.group_id=m.group_id JOIN shared_playlists s ON s.id=g.share_id WHERE m.user_id=? AND s.owner_id<>?) ORDER BY id LIMIT 201 OFFSET ?", [user, user, user, user, offset]),
+      this.incomingShares(user, offset, 200),
     ]);
-    const shares = [];
-    for (const row of incoming.slice(0, 200)) { try { const view = await this.shared(user, row.id); shares.push({ id: row.id, name: view.playlist.name, owner: view.owner, permission: view.permission, tracks: view.playlist.tracks.length }); } catch { /* Revoked/deleted playlist. */ } }
-    return { shareOffset: offset, hasMore: incoming.length > 200, code: code!.code as string, preferences: { online: !!preferences?.show_online, track: !!preferences?.show_track },
+    return { ...incoming, code, preferences: { online: !!preferences?.show_online, track: !!preferences?.show_track },
       friends: friends.map(f => { const current = this.sync.current(f.id); return { id: f.id as string, name: f.name as string, online: f.show_online ? !!current?.online : null, track: f.show_track && current?.online && current.status === "playing" ? current.track : null }; }),
-      requests, groups, owned, shares };
+      requests, groups, owned };
   }
   async request(user: string, code: unknown) {
     if (typeof code !== "string" || code.length > 100) throw fail(400, "Invalid friend code");

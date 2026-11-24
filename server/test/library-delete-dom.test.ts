@@ -19,7 +19,7 @@ test("track deletion uses the shared scrollable Modal, cancel does nothing, and 
     ["i18n/index.ts", "import {en} from './en';export const useT=()=>en;"],
     ["hooks/useMediaQuery.ts", "export const useMediaQuery=()=>true;export const MD='';"],
     ["stores/ui.ts", "import {create} from 'zustand';const h=globalThis.__deleteDom;export const toast=()=>{};export const useUi=create(set=>({menu:{track:h.track,x:10,y:10},closeMenu:()=>set({menu:null}),openAddToPlaylist:()=>{}}));"],
-    ["stores/library.ts", "import {create} from 'zustand';const h=globalThis.__deleteDom;export const useLibrary=create(()=>({favorites:[h.track],deleteTrack:async id=>h.writes.push(id)}));"],
+    ["stores/library.ts", "import {create} from 'zustand';const h=globalThis.__deleteDom;export const useLibrary=create(()=>({favorites:[h.track],favoriteIds:new Set([h.track.id]),deleteTrack:async id=>h.writes.push(id)}));"],
     ["player/player.ts", "export const usePlayer={getState:()=>({})};"],
     ["lib/offlineDownloads.ts", "export const deleteLocalAudio=async id=>globalThis.__deleteDom.purges.push(id);"],
   ].map(([name, code]) => [path.join(root, name!), code!]));

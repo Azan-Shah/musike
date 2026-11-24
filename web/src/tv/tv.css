@@ -1,7 +1,7 @@
 /* Android TV (10-foot) tweaks. Loaded only when html[data-tv="1"] is set. */
 
 html[data-tv="1"] {
-  --tv-ring: var(--accent);
+  --tv-ring: var(--accent-text);
   --tv-ring-soft: color-mix(in srgb, var(--accent) 35%, transparent);
   font-size: 130%;
   scroll-behavior: smooth;

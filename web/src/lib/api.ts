@@ -1,3 +1,4 @@
+import type { LibrarySummary } from "../../../server/src/librarySummary.js";
 import { beginPlaybackTrace, playbackTrace, recordPlayback, responseFailure, configurePlaybackDiagnostics, type FailureKind } from "./playbackDiagnostics";
 import { useSession } from "../stores/session";
 import { getLang, getT } from "../i18n";
@@ -30,8 +31,9 @@ async function request<T>(path: string, init?: RequestInit & { json?: unknown })
   // Only fixed route categories, never queries, provider URLs or user-controlled path segments.
   const operation = path.startsWith("/api/queue/") ? "queue.prepare" : path.startsWith("/api/history") ? "library.history" :
     path.startsWith("/api/prepare/") ? "media.prepare" : path.startsWith("/api/radio/") ? "radio" : path.startsWith("/api/video-for/") ? "video.lookup" : "api";
-  const media = /^\/api\/(radio|prepare|queue|video-for)/.test(path);
-  const signal = media ? AbortSignal.any([...(rest.signal ? [rest.signal] : []), AbortSignal.timeout(20_000)]) : rest.signal;
+  const deadline = /^\/api\/(radio|prepare|queue|video-for)/.test(path) ||
+    (!rest.method && /^\/api\/(library|playlists)(?:\/|$)/.test(path));
+  const signal = deadline ? AbortSignal.any([...(rest.signal ? [rest.signal] : []), AbortSignal.timeout(20_000)]) : rest.signal;
   recordPlayback("http.start", { traceId: trace, operation });
   let res: Response;
   try { res = await fetch(path, { ...rest, redirect: "manual", credentials: "same-origin", signal, headers: {
@@ -44,6 +46,7 @@ async function request<T>(path: string, init?: RequestInit & { json?: unknown })
     recordPlayback("http.error", { traceId: trace, operation, ms: Date.now() - started, reason: failure });
     throw new ApiError(0, failureText(failure), undefined, failure, trace);
   }
+  rest.signal?.throwIfAborted();
   recordPlayback("http.response", { traceId: trace, operation, requestId: res.headers.get("x-musike-request-id") ?? undefined, status: res.status, ms: Date.now() - started, edgeRay: res.headers.get("cf-ray") ?? undefined });
   if (res.status === 204) return undefined as T;
   if (res.status === 401) window.dispatchEvent(new Event("musike:unauthorized"));
@@ -53,6 +56,7 @@ async function request<T>(path: string, init?: RequestInit & { json?: unknown })
     throw new ApiError(res.status, failureText(failure), undefined, failure, trace);
   }
   const body = await res.json().catch(() => null);
+  rest.signal?.throwIfAborted();
   if (!body) throw new ApiError(res.status, failureText("unexpected_response"), undefined, "unexpected_response", trace);
   if (!res.ok) throw new ApiError(res.status, body.error ?? getT().player.httpError(res.status), body.code, failure ?? undefined, trace);
   return body as T;
@@ -98,23 +102,25 @@ export const api: MusikeApi = {
       signal,
     }),
 
-  library: () => request<Library>("/api/library"),
-  addFavorite: (t: Track) => request<{ favorites: Track[] }>(`/api/favorites/${t.id}`, { method: "PUT", json: t }),
-  addFavorites: (tracks: Track[]) => request<{ favorites: Track[] }>("/api/favorites", { method: "POST", json: { tracks } }),
-  removeFavorite: (id: string) => request<{ favorites: Track[] }>(`/api/favorites/${id}`, { method: "DELETE" }),
-  deleteTrack: (id: string) => request<Library>(`/api/library/tracks/${id}`, { method: "DELETE" }),
-  pushHistory: (t: Track) => request<{ history: Track[] }>("/api/history", { method: "POST", json: t }),
-  createPlaylist: (name: string, tracks: Track[] = []) =>
-    request<Playlist>("/api/playlists", { method: "POST", json: { name, tracks } }),
-  renamePlaylist: (id: string, name: string) => request<Playlist>(`/api/playlists/${id}`, { method: "PATCH", json: { name } }),
-  deletePlaylist: (id: string) => request<void>(`/api/playlists/${id}`, { method: "DELETE" }),
-  addToPlaylist: (id: string, t: Track | Track[]) =>
-    request<Playlist>(`/api/playlists/${id}/tracks`, { method: "POST", json: Array.isArray(t) ? { tracks: t } : t }),
-  removeFromPlaylist: (id: string, trackId: string) =>
-    request<Playlist>(`/api/playlists/${id}/tracks/${trackId}`, { method: "DELETE" }),
-
-  importLibrary: (backup: unknown, mode: "merge" | "replace") =>
-    request<ImportResult>("/api/library/import", { method: "POST", json: { backup, mode } }),
+  library: (signal) => request<Library>("/api/library", { signal }),
+  librarySummary: (signal) => request<LibrarySummary>("/api/library/summary", { signal }),
+  libraryFavorites: (signal) => request<{ favorites: Track[] }>("/api/library/favorites", { signal }),
+  playlist: (id, signal) => request<Playlist>(`/api/playlists/${encodeURIComponent(id)}`, { signal }),
+  playlistMembership: (ids, signal) => request<{ playlists: string[] }>("/api/library/playlist-membership", { method: "POST", json: { ids }, signal }),
+  addFavorite: (t, signal) => request<{ favorites: Track[] }>(`/api/favorites/${t.id}`, { method: "PUT", json: t, signal }),
+  addFavorites: (tracks, signal) => request<{ favorites: Track[] }>("/api/favorites", { method: "POST", json: { tracks }, signal }),
+  removeFavorite: (id, signal) => request<{ favorites: Track[] }>(`/api/favorites/${id}`, { method: "DELETE", signal }),
+  deleteTrack: (id, signal) => request<Library>(`/api/library/tracks/${id}`, { method: "DELETE", signal }),
+  pushHistory: (t, signal) => request<{ history: Track[] }>("/api/history", { method: "POST", json: t, signal }),
+  createPlaylist: (name, tracks, signal) => request<Playlist>("/api/playlists", { method: "POST", json: { name, tracks }, signal }),
+  renamePlaylist: (id, name, signal) => request<Playlist>(`/api/playlists/${encodeURIComponent(id)}`, { method: "PATCH", json: { name }, signal }),
+  deletePlaylist: (id, signal) => request<void>(`/api/playlists/${encodeURIComponent(id)}`, { method: "DELETE", signal }),
+  addToPlaylist: (id, t, signal) =>
+    request<Playlist>(`/api/playlists/${encodeURIComponent(id)}/tracks`, { method: "POST", json: Array.isArray(t) ? { tracks: t } : t, signal }),
+  removeFromPlaylist: (id, trackId, signal) =>
+    request<Playlist>(`/api/playlists/${encodeURIComponent(id)}/tracks/${trackId}`, { method: "DELETE", signal }),
+  importLibrary: (backup, mode, signal) =>
+    request<ImportResult>("/api/library/import", { method: "POST", json: { backup, mode }, signal }),
 
   system: () => request<SystemInfo>("/api/system"),
   updateYtdlp: (channel: Channel) => request<SystemJob>("/api/system/ytdlp", { method: "POST", json: { channel } }),

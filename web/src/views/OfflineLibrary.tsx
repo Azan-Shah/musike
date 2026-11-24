@@ -40,7 +40,7 @@ export function OfflineExperience() {
   useEffect(() => {
     let stopped = false; const owner = offlineOwner();
     void refreshOffline();
-    void offlineLibrarySnapshot().then(library => { if (!stopped && owner === offlineOwner()) useLibrary.setState({ ...library, status: "ready" }); }).catch(() => { if (!stopped) setError(t.offline.storageUnavailable); });
+    void offlineLibrarySnapshot().then(library => { if (!stopped && owner === offlineOwner()) useLibrary.getState().reset(library); }).catch(() => { if (!stopped) setError(t.offline.storageUnavailable); });
     return () => { stopped = true; };
   }, []);
   useEffect(() => {

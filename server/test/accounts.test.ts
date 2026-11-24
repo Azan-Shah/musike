@@ -110,6 +110,36 @@ test("auth wall scopes every legacy library endpoint and old behavior remains wh
   } finally { await app.close(); await f.restore(); }
 });
 
+test("Library summaries, selected collections and membership are scoped to the signed-in owner", async () => {
+  const f = await fixture();
+  const app = await createApp(f.options);
+  const call = (url: string, cookie?: string, payload?: unknown) => app.inject({
+    url, method: payload === undefined ? "GET" : "POST",
+    headers: { "x-musike-request": "1", ...(cookie ? { cookie } : {}) },
+    ...(payload === undefined ? {} : { payload }),
+  });
+  const login = async (n: number, invite?: string) => {
+    const challenge = (await call("/api/auth/request", undefined, { phone: phone(n), invite })).json();
+    const response = await call("/api/auth/verify", undefined, { challengeId: challenge.challengeId, code: f.codes.get(phone(n)) });
+    assert.equal(response.statusCode, 200);
+    return (response.headers["set-cookie"] as string[]).map(value => value.split(";")[0]).join("; ");
+  };
+  try {
+    assert.equal((await call("/api/library/summary")).statusCode, 401);
+    const admin = await login(1);
+    const invite = (await call("/api/admin/invites", admin, {})).json().code;
+    const user = await login(2, invite);
+    const created = (await call("/api/playlists", admin, { name: "Private", tracks: [track] })).json();
+    assert.equal((await call("/api/favorites", admin, { tracks: [track] })).statusCode, 200);
+    assert.equal((await call("/api/library/summary", admin)).json().playlists[0].id, created.id);
+    assert.deepEqual((await call("/api/library/summary", user)).json(), { playlists: [], favorites: { ids: [], preview: [] }, history: [] });
+    assert.deepEqual((await call("/api/library/favorites", user)).json(), { favorites: [] });
+    assert.equal((await call(`/api/playlists/${created.id}`, user)).statusCode, 404);
+    assert.deepEqual((await call("/api/library/playlist-membership", user, { ids: [track.id] })).json(), { playlists: [] });
+    assert.deepEqual((await call("/api/library/playlist-membership", admin, { ids: [track.id] })).json(), { playlists: [created.id] });
+  } finally { await app.close(); await f.restore(); }
+});
+
 test("token encryption is bound to its owner/context and no plaintext is stored", () => {
   const box = secretBox(secret); const token = "not-a-real-provider-token"; const encrypted = box.seal(token, "user-A");
   assert.equal(encrypted.includes(token), false); assert.equal(box.open(encrypted, "user-A"), token);

@@ -35,7 +35,8 @@ async function harness(options: { offline?: boolean; delayedReady?: boolean } = 
     MediaMetadata: class { constructor(_data: unknown) {} }, location: { protocol: "https:", reload() {} },
     addEventListener: browser.addEventListener.bind(browser), removeEventListener: browser.removeEventListener.bind(browser), dispatchEvent: browser.dispatchEvent.bind(browser),
     setInterval: (...args: any[]) => { (h.intervals ??= []).push({ run: args[0], ms: args[1] }); const timer = (interval as any)(...args); timer.unref(); timers.push(timer); return timer; },
-    setTimeout: (...args: any[]) => { const timer = (timeout as any)(...args); if (args[1] > 1000) timer.unref(); timers.push(timer); return timer; },
+    // Recovery tests await these finite timers. Keep them live until the fixture cleans them up.
+    setTimeout: (...args: any[]) => { const timer = (timeout as any)(...args); timers.push(timer); return timer; },
   };
   const descriptors = new Map(Object.keys(values).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(values)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });

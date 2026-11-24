@@ -11,3 +11,7 @@ export interface SocialState {
 export interface SharedPlaylistView { id: string; owner: { id: string; name: string }; permission: string; playlist: Playlist }
 export const socialState = (offset = 0) => accountRequest<SocialState>(`/api/social?offset=${offset}`);
 export const sharedPlaylist = (id: string) => accountRequest<SharedPlaylistView>(`/api/shared-playlists/${encodeURIComponent(id)}`);
+
+export const incomingShares = (offset: number, limit: number, signal: AbortSignal) =>
+  accountRequest<Pick<SocialState, "shareOffset" | "hasMore" | "shares">>(
+    `/api/social/shares?offset=${offset}&limit=${limit}`, undefined, undefined, signal);

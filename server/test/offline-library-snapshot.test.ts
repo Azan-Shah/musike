@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import "fake-indexeddb/auto";
-import { offlineSettings, readOfflineAudio, readOfflineLibrary, saveOfflineLibrary, purgeOfflineOwner } from "../../web/src/lib/offlineStore.ts";
+import { offlineEnabled, offlineSettings, readOfflineAudio, readOfflineLibrary, saveOfflineLibrary, saveOfflineHistory, purgeOfflineOwner } from "../../web/src/lib/offlineStore.ts";
 
 test("version-one audio survives the additive metadata upgrade; snapshots require opt-in and purge by owner", async () => {
   const owner = crypto.randomUUID(); const other = crypto.randomUUID();
@@ -36,4 +36,24 @@ test("version-one audio survives the additive metadata upgrade; snapshots requir
     await assert.rejects(saveOfflineLibrary(other, { ...library, favorites: [{ ...track, title: "x".repeat(9 * 1024 * 1024) }] }));
     assert.deepEqual(await readOfflineLibrary(other), library, "failed snapshot admission must retain the previous complete metadata");
   } finally { await purgeOfflineOwner(owner); await purgeOfflineOwner(other); }
+});
+
+test("offline history updates preserve full collection tracks and respect owner opt-in and deletion", async () => {
+  const owner = crypto.randomUUID();
+  const track = { id: "00000000001", title: "Saved", artist: "Fixture", duration: 12, thumb: "", art: "", kind: "song" as const };
+  const other = { ...track, id: "00000000002" };
+  const library = { favorites: [track], history: [], playlists: [{ id: "offline-mix", name: "Mix", createdAt: 1, updatedAt: 1, tracks: [track, other] }] };
+  try {
+    assert.equal(await offlineEnabled(owner), false);
+    await saveOfflineHistory(owner, [track]);
+    assert.equal(await readOfflineLibrary(owner), null);
+    await offlineSettings(owner, { enabled: true, deleted: [track.id] });
+    assert.equal(await offlineEnabled(owner), true);
+    await saveOfflineLibrary(owner, library);
+    await saveOfflineHistory(owner, [track, other]);
+    assert.deepEqual(await readOfflineLibrary(owner), { ...library, history: [other] });
+    await purgeOfflineOwner(owner);
+    await saveOfflineHistory(owner, [other]);
+    assert.equal(await readOfflineLibrary(owner), null);
+  } finally { await purgeOfflineOwner(owner); }
 });

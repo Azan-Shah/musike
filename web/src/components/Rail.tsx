@@ -9,7 +9,7 @@ import {
   MagnifyingGlassIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router";
 import { useT } from "../i18n";
 import { cn } from "../lib/format";
@@ -20,6 +20,9 @@ import { needsAttention, useSystem } from "../stores/system";
 import { useUi } from "../stores/ui";
 import { Artwork } from "./Artwork";
 import { Logo, LogoMark } from "./Brand";
+import { useListPage } from "../hooks/useListPage";
+import { ListPager } from "./ListPager";
+import type { PlaylistSummary } from "../../../server/src/librarySummary.js";
 import { NamePlaylistDialog } from "./Dialogs";
 
 const nav = [
@@ -95,13 +98,29 @@ function RailLink({ to, label, sub, end, children }: { to: string; label: string
   );
 }
 
+const PlaylistLink = memo(function PlaylistLink({ playlist }: { playlist: PlaylistSummary }) {
+  const t = useT();
+  return <RailLink to={paths.playlist(playlist.id)} label={playlist.name} sub={t.common.tracks(playlist.trackCount)}>
+    <Artwork src={playlist.cover[0]?.thumb} className="size-full" iconSize={18} />
+  </RailLink>;
+});
+
+function RailPlaylists() {
+  const owner = useSession(s => s.user?.id);
+  const playlists = useLibrary(s => s.playlists);
+  const page = useListPage(playlists, `rail:${owner ?? "local"}`, 30);
+  return <>
+    <ListPager {...page} total={playlists.length} compact />
+    {page.items.map(playlist => <PlaylistLink key={playlist.id} playlist={playlist} />)}
+  </>;
+}
+
 export function Rail() {
   const signedIn = useSession(s => !!s.user);
   const offline = useSession(s => !!s.offline);
   const t = useT();
   const sidebarPlaylists = useAppearance((s) => s.sidebarPlaylists);
-  const playlists = useLibrary((s) => s.playlists);
-  const favorites = useLibrary((s) => s.favorites);
+  const favorites = useLibrary((s) => s.favoriteIds.size);
   const createPlaylist = useLibrary((s) => s.createPlaylist);
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
@@ -156,7 +175,7 @@ export function Rail() {
         </div>
 
         <div className="scroll-area flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-2">
-          <RailLink to={paths.favorites} label={t.nav.favorites} sub={t.common.tracks(favorites.length)}>
+          <RailLink to={paths.favorites} label={t.nav.favorites} sub={t.common.tracks(favorites)}>
             <span className="grid size-full place-items-center bg-accent-soft text-accent-text">
               <HeartIcon size={20} weight="fill" />
             </span>
@@ -166,11 +185,7 @@ export function Rail() {
               <ClockCounterClockwiseIcon size={20} />
             </span>
           </RailLink>
-          {sidebarPlaylists && playlists.map((p) => (
-            <RailLink key={p.id} to={paths.playlist(p.id)} label={p.name} sub={t.common.tracks(p.tracks.length)}>
-              <Artwork src={p.tracks[0]?.thumb} className="size-full" iconSize={18} />
-            </RailLink>
-          ))}
+          {sidebarPlaylists && <RailPlaylists />}
         </div>
 
         <div className="flex border-t border-line p-2">

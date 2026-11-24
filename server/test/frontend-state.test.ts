@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createLibraryStore } from "../../web/src/stores/libraryState.js";
+import { summarizeLibrary } from "../src/librarySummary.js";
 import { en } from "../../web/src/i18n/en.js";
 import type { MusikeApi } from "../../web/src/lib/apiTypes.js";
 import type { Library, Track } from "../../web/src/lib/types.js";
@@ -16,7 +17,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
-const makeStore = (api: Partial<MusikeApi>) => createLibraryStore(api as MusikeApi, () => en, () => {});
+const makeStore = (api: Partial<MusikeApi>) => createLibraryStore({
+  librarySummary: async () => summarizeLibrary(await api.library?.() ?? empty()),
+  ...api,
+} as MusikeApi, () => en, () => {});
 
 test("favorites remain optimistic while older responses settle and requests run in order", async () => {
   const first = deferred<{ favorites: Track[] }>();
@@ -116,6 +120,69 @@ test("backup import is ordered with pending and subsequent library edits", async
   await Promise.all([a, imported, b]);
   assert.deepEqual(calls, [`add:${track(1).id}`, "import", `add:${track(2).id}`]);
   assert.deepEqual(store.getState().favorites.map((t) => t.id), [track(2).id, track(3).id]);
+});
+
+test("summary keeps favorites membership and lazily loads whole collections with bounded retention", async () => {
+  const favorites = Array.from({ length: 230 }, (_, i) => track(i + 1));
+  const playlists = Array.from({ length: 6 }, (_, i) => ({ id: `playlist-${i}`, name: `Playlist ${i}`, tracks: favorites, createdAt: 0, updatedAt: 0 }));
+  const data = { favorites, playlists, history: [track(1)] };
+  const reads: string[] = [];
+  const store = makeStore({
+    librarySummary: async () => { reads.push("summary"); return summarizeLibrary(data); },
+    library: async () => { throw new Error("Startup must not ask for a full backup"); },
+    libraryFavorites: async () => { reads.push("favorites"); return { favorites: data.favorites }; },
+    playlist: async id => { reads.push(id); return playlists.find(p => p.id === id)!; },
+    renamePlaylist: async (id, name) => ({ ...playlists.find(p => p.id === id)!, name }),
+    removeFavorite: async id => ({ favorites: data.favorites = data.favorites.filter(t => t.id !== id) }),
+  });
+  const actions = store.getState();
+  await actions.load();
+  assert.deepEqual(reads, ["summary"]);
+  assert.equal(store.getState().favorites.length, 5);
+  assert.equal(store.getState().favoriteIds.size, 230);
+  assert.equal(store.getState().details.size, 0);
+  assert.equal(store.getState().playlists[0]!.trackCount, 230);
+  assert.equal(Object.hasOwn(store.getState().playlists[0]!, "tracks"), false);
+  assert.equal(actions.isFavorite(track(220).id), true);
+  await actions.toggleFavorite(track(220));
+  assert.equal(actions.isFavorite(track(220).id), false);
+  await actions.renamePlaylist("playlist-0", "New name");
+  assert.equal(store.getState().playlists[0]!.name, "New name");
+  assert.equal(store.getState().details.size, 0);
+
+  const first = actions.loadPlaylist("playlist-1");
+  assert.equal(first, actions.loadPlaylist("playlist-1"));
+  assert.deepEqual((await first).tracks, favorites);
+  for (let i = 2; i < 6; i++) await actions.loadPlaylist(`playlist-${i}`);
+  assert.deepEqual([...store.getState().details.keys()], ["playlist-2", "playlist-3", "playlist-4", "playlist-5"]);
+  assert.deepEqual(await actions.loadFavorites(), data.favorites);
+  assert.deepEqual(await actions.loadFavorites(), data.favorites);
+  assert.equal(reads.filter(read => read === "favorites").length, 1);
+  assert.equal(reads.filter(read => read === "playlist-1").length, 1);
+  await actions.load();
+  assert.equal(store.getState().details.size, 0);
+  assert.equal(store.getState().favoritesComplete, false);
+});
+
+test("late responses and queued writes are fenced after account reset or offline hydration", async () => {
+  const reply = deferred<Library>();
+  let writes = 0;
+  const store = makeStore({
+    librarySummary: async () => summarizeLibrary(await reply.promise),
+    addFavorite: async track => { writes++; return { favorites: [track] }; },
+  });
+  const state = store.getState();
+  const oldLoad = state.load();
+  const oldWrite = state.toggleFavorite(track(2));
+  await flush();
+  const local = { ...empty(), favorites: [track(4)], playlists: [{ id: "offline-one", name: "Saved", createdAt: 0, updatedAt: 0, tracks: [track(6)] }] };
+  state.reset(local);
+  reply.resolve({ ...empty(), favorites: [track(1)] });
+  await Promise.all([oldLoad, oldWrite]);
+  assert.equal(writes, 0);
+  assert.equal(store.getState().status, "ready");
+  assert.deepEqual(await state.loadFavorites(), local.favorites);
+  assert.deepEqual(await state.loadPlaylist("offline-one"), local.playlists[0]);
 });
 
 test("session cache bounds retention, expires null entries, and supports invalidation", (t) => {

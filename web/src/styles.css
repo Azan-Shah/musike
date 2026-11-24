@@ -98,9 +98,8 @@
     cursor: pointer;
   }
   :focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--accent-text);
     outline-offset: 2px;
-    border-radius: 8px;
   }
   ::selection {
     background: var(--accent);
@@ -110,7 +109,12 @@
 
 @layer components {
   .button-secondary {
-    @apply h-11 rounded-full bg-surface-3 px-5 text-sm font-medium text-fg transition-colors hover:bg-surface-4;
+    @apply inline-flex h-11 items-center justify-center rounded-full bg-surface-3 px-5 text-sm font-medium text-fg transition-colors disabled:cursor-default disabled:opacity-40;
+  }
+  @media (hover: hover) {
+    .button-secondary:not(:disabled):hover {
+      background: var(--surface-4);
+    }
   }
   /* Floating island with a nested bezel: outer shell + inner core (high-end-visual-design). */
   .island {

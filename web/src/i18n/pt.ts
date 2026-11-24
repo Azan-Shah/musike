@@ -67,6 +67,8 @@ export const pt: Messages = {
   },
 
   library: {
+    filterPlaylists: "Buscar playlists",
+    noMatchingPlaylists: "Nenhuma playlist encontrada.",
     backup: "Backup da biblioteca (exportar ou importar)",
     newShort: "Nova",
     create: "Criar",

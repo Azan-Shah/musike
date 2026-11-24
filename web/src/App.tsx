@@ -65,7 +65,7 @@ function OnlineApp() {
 
   useEffect(() => {
     void loadLibrary();
-  }, [loadLibrary]);
+  }, [loadLibrary, session.enabled, session.user?.id]);
 
   // Check yt-dlp shortly after start and say so once if something needs doing (not on Android: no yt-dlp there).
   useEffect(() => {

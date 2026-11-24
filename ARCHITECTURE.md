@@ -21,7 +21,7 @@ Interaction boundaries:
 - `server/src/app.ts` validates HTTP inputs and wires routes to library, discovery, streaming, and system modules.
 - Platform-independent `library.ts`, `browse.ts`, `search.ts`, `cache.ts`, `directAudio.ts`, `i18n.ts`, `taskQueue.ts`, and `types.ts` may be reached by browser code. Keep Node-only storage/process work outside those shared modules.
 - `AUTH_ENABLED` is off unless exactly true: legacy HTTP/shared-library behavior remains. When on, a hard API/login wall scopes every library operation to the authenticated user; instance settings/tool actions are admin-only. Invite approval precedes account creation. SQLite and cached library snapshots assume one owning application process; do not scale replicas over the same data directory.
-- Keep the existing full-library API for backups. The new paginated track endpoint is additive; the current UI still loads the full library.
+- Keep the existing full-library API for backups. Online startup uses the catalog summary and loads the selected collection when needed. The paginated track endpoint remains available.
 
 Commands: `pnpm dev`, `pnpm build` (web only), `pnpm start`, `pnpm typecheck`, `pnpm test`, `pnpm --filter @musike/server bundle`.
 
@@ -595,3 +595,22 @@ Diagnostics reuse the bounded allowlist/ring: `sync.seek_requested`, `sync.seek_
 Offline deletion markers and downloads stay on their installation; no remote deletion tombstone is sent. Library mutations remain account-shared server data. A clean disconnect permits explicit takeover promptly, but an unreachable device's buffered sound cannot be proved silent. Browser autoplay, reduced UA model information, locked-page scheduling and provider availability remain real acceptance limits. No new DOM hook is required.
 
 Rollback: retain a consistent data/secret backup and prior assets/image. The SQLite column is additive and ignored by older source; browser IDB remains version 2. Do not clear downloaded audio or site data as an upgrade step. Old clients retain per-document identities until refreshed; replace all client assets during demo acceptance.
+
+## 11. Library and query performance — 24 November 2026
+
+Library, Collection and the rail use existing React components and narrow Zustand subscriptions. The Library filters playlist names locally and renders 36 playlist cards per page. The rail mounts up to 30 personal playlist links and reads playlist state only while enabled. Track rows retain the 100-row page size and play from the complete collection. Offline metadata and backup consumers still use the full Library snapshot. Collection playback membership and pin counters derive from stable inputs, so unrelated download byte updates do not repeat collection-wide work.
+
+GET `/api/social/shares?offset=0&limit=30` returns `{shareOffset, hasMore, shares}` for the signed-in recipient. Offset is 0–1,000,000 and limit is 1–200. Shares contain ID, name, permission, owner ID/display name and track count. A single statement evaluates direct and group grants for approved owners. Editor wins over viewer when both grant paths exist. The service loads each represented owner's live library at most once per page. Offsets count grants, so removed playlist documents can leave a short page with `hasMore: true`. The existing Social endpoint retains its response fields and 200-grant pages. Direct access and mutation still check the share's live permission.
+
+Worker migration `query-performance-v1` backs up existing databases with `VACUUM INTO`, applies four indexes and records the marker in one `BEGIN IMMEDIATE` transaction. Indexes cover OTP cleanup by created time, OAuth state expiry, client rows by session hash and running Google import runs through a partial index. The worker retains one WAL connection with foreign keys, FULL durability, a five-second busy timeout and a bounded 128-statement reuse cache. Audit inserts and trimming share a transaction. Filesystem discovery during tool jobs uses asynchronous reads.
+
+`styles.css` owns the semantic theme, radius and focus tokens and the shared secondary control style. Light/custom focus uses the contrast-adjusted accent-text token. TV keeps its scoped ring and sizing.
+
+
+## 12. Initial Library loading
+
+`GET /api/library/summary` uses the same owner-scoped storage as `GET /api/library`. The response contains playlist metadata, track counts and up to four small artwork records per playlist, all Favorites IDs, up to five Favorites tracks, and up to 60 recent tracks. The persistent JSON library retains its existing layout. A cold server must still load that JSON row or file before generating metadata.
+
+`GET /api/playlists/:pid` returns one complete personal playlist. `GET /api/library/favorites` returns the complete Favorites collection. The Catalog, Home and rail use the summary. Collection opening, Home's Play controls, and adding a personal playlist to a shared edit load the applicable detail on demand. Up to four recently loaded personal playlists are retained online. Full collection detail preserves queue order, play from a later page, shuffle, and playlist pin requests. `POST /api/library/playlist-membership` checks up to 500 selected track IDs against the signed-in owner's playlists and returns only IDs that already contain the selection.
+
+Library reads and edits share the ordered optimistic queue. Owner or offline transitions abort the old scope and clear pending online state. Summary refresh invalidates stale detail after import or shared-copy updates. Offline mode hydrates the existing complete IndexedDB metadata. When downloads are enabled, the browser refreshes full metadata in the background after the summary renders and after committed collection changes. Recent plays update existing local metadata only. The explicit online Downloads overview fetches a full library to calculate download counts locally. Backup export retains `GET /api/library` and version 1 backup files. No storage format migration is required for Library summary loading.

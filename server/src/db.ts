@@ -3,10 +3,10 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 export const schema = `
+PRAGMA busy_timeout=5000;
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=FULL;
 PRAGMA foreign_keys=ON;
-PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS migrations(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, phone TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '',
  role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('user','admin')), status TEXT NOT NULL DEFAULT 'approved' CHECK(status IN ('pending','approved','disabled')),
@@ -91,6 +91,12 @@ const preferenceSchema = `
 CREATE TABLE account_preferences(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  normalization TEXT NOT NULL DEFAULT 'standard' CHECK(normalization IN ('quiet','standard','loud')), revision INTEGER NOT NULL DEFAULT 0);
 INSERT INTO migrations(key,value) VALUES('audio-normalization-v1','1');`;
+const performanceSchema = `
+CREATE INDEX otps_cleanup_time ON otps(created_at);
+CREATE INDEX oauth_states_expiry ON oauth_states(expires_at);
+CREATE INDEX clients_session ON clients(session_hash);
+CREATE INDEX import_runs_running ON import_runs(status) WHERE status='running';
+INSERT INTO migrations(key,value) VALUES('query-performance-v1','1');`;
 export type Statement = { sql: string; params?: Value[]; mode?: "get" | "all" | "run" };
 /** SQLite is synchronous only inside this worker; request handlers await RPC, never block on SQL. */
 export class Database {
@@ -103,6 +109,8 @@ export class Database {
   private constructor(file: string) {
     const source = `const {parentPort,workerData}=require('node:worker_threads');
       const {DatabaseSync}=require('node:sqlite');
+      const fs = require('node:fs');
+      const existing = (fs.statSync(workerData.file, {throwIfNoEntry:false})?.size ?? 0) > 0;
       const db=new DatabaseSync(workerData.file);db.exec(workerData.schema);
       if(!db.prepare("SELECT key FROM migrations WHERE key='playback-discord-v1'").get()){
         if(db.prepare('SELECT count(*) AS n FROM users').get().n) {const target=workerData.file+'.before-playback-discord-'+require('node:crypto').randomUUID()+'.sqlite';db.prepare('VACUUM INTO ?').run(target);require('node:fs').chmodSync(target,0o600);}
@@ -120,8 +128,27 @@ export class Database {
         if(db.prepare('SELECT count(*) AS n FROM users').get().n) {const target=workerData.file+'.before-account-appearance-'+require('node:crypto').randomUUID()+'.sqlite';db.prepare('VACUUM INTO ?').run(target);require('node:fs').chmodSync(target,0o600);}
         db.exec('BEGIN IMMEDIATE');try{db.exec("ALTER TABLE account_preferences ADD COLUMN json TEXT NOT NULL DEFAULT '{}'; INSERT INTO migrations(key,value) VALUES('account-appearance-v1','1');");db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
       }
-      const execute=({sql,params=[],mode='run'})=>{const q=db.prepare(sql);const value=q[mode](...params);
-        return mode==='run'?{changes:Number(value.changes),lastInsertRowid:Number(value.lastInsertRowid)}:value;};
+      if(!db.prepare("SELECT key FROM migrations WHERE key='query-performance-v1'").get()){
+        if(existing){
+          const target=workerData.file+'.before-query-performance-'+require('node:crypto').randomUUID()+'.sqlite';
+          db.prepare('VACUUM INTO ?').run(target);fs.chmodSync(target,0o600);
+        }
+        db.exec('BEGIN IMMEDIATE');
+        try{db.exec(workerData.performanceSchema);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+      }
+      const prepared = new Map();
+      const execute = ({sql, params = [], mode = 'run'}) => {
+        let statement = prepared.get(sql);
+        if (statement) {
+          prepared.delete(sql);
+        } else {
+          statement = db.prepare(sql);
+          if (prepared.size === 128) prepared.delete(prepared.keys().next().value);
+        }
+        prepared.set(sql, statement);
+        const value = statement[mode](...params);
+        return mode === 'run' ? {changes: Number(value.changes), lastInsertRowid: Number(value.lastInsertRowid)} : value;
+      };
       parentPort.on('message',({id,operation,statements})=>{try{let result;
         if(operation==='close'){db.close();parentPort.postMessage({id,result:true});parentPort.close();return;}
         if(operation==='backup'){db.prepare('VACUUM INTO ?').run(statements[0].params[0]);require('node:fs').chmodSync(statements[0].params[0],0o600);parentPort.postMessage({id,result:true});return;}
@@ -129,7 +156,7 @@ export class Database {
         else result=execute(statements[0]);parentPort.postMessage({id,result});
       }catch(e){parentPort.postMessage({id,error:'Database operation failed',detail:e.message});}});
       parentPort.postMessage({id:0,result:true});`;
-    this.worker = new Worker(source, { eval: true, workerData: { file, schema, featureSchema, socialSchema, preferenceSchema } });
+    this.worker = new Worker(source, { eval: true, workerData: { file, schema, featureSchema, socialSchema, preferenceSchema, performanceSchema } });
     this.worker.on("message", ({ id, result, error, detail }) => {
       const job = this.pending.get(id); if (!job) return; this.pending.delete(id);
       if (error) job.reject(new Error(error, { cause: detail })); else job.resolve(result);

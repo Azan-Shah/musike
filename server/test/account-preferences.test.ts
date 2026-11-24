@@ -55,3 +55,43 @@ test("normalization migration backs up existing owners, is idempotent, indexed a
     assert.equal((await db.get("SELECT count(*) AS n FROM account_preferences"))!.n, 0);
   } finally { await db.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test("performance indexes upgrade a populated DB once and serve the maintenance queries", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "musike-performance-migration-"));
+  const file = path.join(dir, "test.sqlite");
+  const queries = [
+    ["otps_cleanup_time", "DELETE FROM otps WHERE created_at<?", [10]],
+    ["oauth_states_expiry", "DELETE FROM oauth_states WHERE expires_at<?", [10]],
+    ["clients_session", "DELETE FROM clients WHERE session_hash IN (SELECT access_hash FROM sessions WHERE access_hash=? OR refresh_hash=?)", ["access", "refresh"]],
+    ["import_runs_running", "SELECT id,user_id,report FROM import_runs WHERE status='running'", []],
+  ] as const;
+  let db = await Database.open(file);
+  try {
+    await db.run("INSERT INTO settings(key,value) VALUES('fixture','true')");
+    for (const [index] of queries) await db.run(`DROP INDEX ${index}`);
+    await db.run("DELETE FROM migrations WHERE key='query-performance-v1'");
+    await db.close();
+    db = await Database.open(file);
+    for (const [index, sql, params] of queries) {
+      const plan = await db.all(`EXPLAIN QUERY PLAN ${sql}`, [...params]);
+      assert.ok(plan.some(step => step.detail.includes(index)), JSON.stringify(plan));
+    }
+    const backups = () => readdir(dir).then(names => names.filter(name => name.includes("before-query-performance")));
+    const [backup] = await backups();
+    assert.ok(backup);
+    assert.equal((await stat(path.join(dir, backup))).mode & 0o777, 0o600);
+    await db.close();
+    db = await Database.open(file);
+    assert.deepEqual(await backups(), [backup]);
+    assert.equal((await db.get("SELECT value FROM settings WHERE key='fixture'"))?.value, "true");
+    await db.batch([
+      { sql: "INSERT INTO audit(at,action,ip) VALUES(1,'fixture','local')" },
+      { sql: "WITH RECURSIVE seq(n) AS (SELECT 2 UNION ALL SELECT n+1 FROM seq WHERE n<1005) INSERT INTO audit(at,action,ip) SELECT n,'fixture','local' FROM seq" },
+      { sql: "DELETE FROM audit WHERE id < (SELECT id FROM audit ORDER BY id DESC LIMIT 1 OFFSET 999)" },
+    ]);
+    assert.deepEqual(await db.get("SELECT count(*) AS n,min(id) AS oldest FROM audit"), { n: 1000, oldest: 6 });
+  } finally {
+    await db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

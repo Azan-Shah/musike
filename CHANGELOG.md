@@ -1,3 +1,22 @@
+# Performance release with compiled server and PWA — 24 November 2026
+
+- Start Library from an account-scoped index. Load a complete playlist or Favorites on demand and retain queue order after paging.
+- Refresh full offline metadata only for opted-in installations. Save recent history to the local snapshot without downloading all playlists again.
+- Preserve backup format, playlist import refresh, sharing access, and optimistic edit ordering.
+- Fix Node 22 process and playback test fixtures. The production code retains its existing media and timer behavior.
+- Include the verified query, CSS, paging, and SQLite improvements below in the prebuilt release.
+
+---
+
+# Performance audit and source overlay — 24 November 2026
+
+- Page and filter personal playlists, page sidebar links, and load incoming shares through an owner-scoped summary endpoint.
+- Batch direct and group grant evaluation and jam revocation membership reads. Reuse SQLite prepared statements, index four cleanup/recovery queries, and trim audit records inside the insert transaction.
+- Keep tool discovery asynchronous and use shared tokens for focus, secondary controls, cards and panels.
+- Apply after the 24 November unresolved-issues source revision. See the current acceptance and deployment notes.
+
+---
+
 # Approved source revision — 24 November 2026
 
 - Fix BUG-007/022 unlock/probe ordering, preserve failure classification and bounded recovery; retain ten-transition synthetic coverage and require physical Samsung acceptance.

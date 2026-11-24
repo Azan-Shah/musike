@@ -120,12 +120,35 @@ export async function purgeOfflineOwner(owner: string) {
   });
 }
 
+export async function offlineEnabled(owner: string) {
+  return transaction(["settings"], "readonly", async tx =>
+    !!(await request<OfflineSettings | undefined>(tx.objectStore("settings").get(owner)))?.enabled);
+}
+
+const checkLibrarySize = (library: Library) => {
+  if (new Blob([JSON.stringify(library)]).size > 8 * MIB) throw new Error("metadata_limit");
+};
+
 /** Private metadata snapshot only; it cannot authorize login or output. */
 export async function saveOfflineLibrary(owner: string, library: Library) {
-  if (new Blob([JSON.stringify(library)]).size > 8 * MIB) throw new Error("metadata_limit");
+  checkLibrarySize(library);
   return transaction(["settings", "library"], "readwrite", async tx => {
     const settings = await request<OfflineSettings | undefined>(tx.objectStore("settings").get(owner));
     if (settings?.enabled) tx.objectStore("library").put({ owner, library });
+  });
+}
+/** Recent playback updates the existing local snapshot without fetching private track lists again. */
+export async function saveOfflineHistory(owner: string, history: Track[]) {
+  return transaction(["settings", "library"], "readwrite", async tx => {
+    const settings = await request<OfflineSettings | undefined>(tx.objectStore("settings").get(owner));
+    if (!settings?.enabled) return;
+    const store = tx.objectStore("library");
+    const row = await request<{ library: Library } | undefined>(store.get(owner));
+    if (!row) return;
+    const deleted = new Set(settings.deleted);
+    const library = { ...row.library, history: history.filter(track => !deleted.has(track.id)) };
+    checkLibrarySize(library);
+    store.put({ owner, library });
   });
 }
 export async function readOfflineLibrary(owner: string): Promise<Library | null> {

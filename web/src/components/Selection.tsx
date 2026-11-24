@@ -2,7 +2,6 @@ import { CheckIcon, HeartIcon, PlayIcon, PlaylistIcon, VideoCameraIcon } from "@
 import { useState, type ReactNode } from "react";
 import { useListPage } from "../hooks/useListPage";
 import { ListPager } from "./ListPager";
-import { trackIds } from "../lib/trackIds";
 import { useT } from "../i18n";
 import { cn, formatTime } from "../lib/format";
 import type { Track } from "../lib/types";
@@ -159,7 +158,7 @@ export function SelectableRow({
 }) {
   const isCurrent = usePlayer((s) => selectCurrent(s)?.id === track.id);
   const isPlaying = usePlayer((s) => selectCurrent(s)?.id === track.id && (s.status === "playing" || s.status === "loading"));
-  const isFavorite = useLibrary((s) => trackIds(s.favorites).has(track.id));
+  const isFavorite = useLibrary((s) => s.favoriteIds.has(track.id));
   const t = useT();
 
   return (

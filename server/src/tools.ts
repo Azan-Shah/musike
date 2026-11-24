@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { config } from "./config.js";
@@ -43,33 +43,49 @@ async function registryPath(): Promise<string[]> {
   return parts;
 }
 
+function isMissing(error: unknown) {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+async function directories(dir: string) {
+  return readdir(dir).catch(error => {
+    if (isMissing(error)) return [];
+    throw error;
+  });
+}
+
 /** winget portable packages live here even when their folder never made it onto any PATH. */
-function wingetPackageDirs(): string[] {
+async function wingetPackageDirs(): Promise<string[]> {
   const root = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Microsoft", "WinGet");
   if (!root) return [];
   const dirs = [path.join(root, "Links")];
   const packages = path.join(root, "Packages");
-  if (!existsSync(packages)) return dirs;
-  for (const pkg of readdirSync(packages)) {
+  for (const pkg of await directories(packages)) {
     if (!/^(yt-dlp\.yt-dlp|yt-dlp\.FFmpeg|Gyan\.FFmpeg|DenoLand\.Deno)_/i.test(pkg)) continue;
     const dir = path.join(packages, pkg);
     dirs.push(dir);
     // FFmpeg builds nest the binaries: <pkg>/ffmpeg-<version>/bin
-    for (const sub of readdirSync(dir)) {
+    for (const sub of await directories(dir)) {
       const bin = path.join(dir, sub, "bin");
-      if (existsSync(bin)) dirs.push(bin);
+      if (await lstat(bin).catch(() => null)) dirs.push(bin);
     }
   }
   return dirs;
 }
 
-function find(name: string, dirs: string[]): string | null {
+async function find(name: string, dirs: string[]): Promise<string | null> {
   const exts = isWindows ? [".exe", ".cmd", ".bat"] : [""];
   for (const dir of dirs) {
     for (const ext of exts) {
       const file = path.join(dir, name + ext);
       // lstat, not stat: winget.exe is an app execution alias (a reparse point stat can't follow).
-      if (lstatSync(file, { throwIfNoEntry: false })) return file;
+      try {
+        await lstat(file);
+        return file;
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+      }
     }
   }
   return null;
@@ -82,7 +98,7 @@ export async function refreshTools(): Promise<Tools> {
   // With a private bin folder (desktop app), use only Musike's own copies: known versions that can self-update,
   // instead of whatever happens to be on the user's PATH.
   const own = config.binDir ? [config.binDir, path.join(config.binDir, "ffmpeg")] : [];
-  const system = config.binDir ? [] : [...(process.env[key] ?? "").split(path.delimiter), ...(await registryPath()), ...wingetPackageDirs()];
+  const system = config.binDir ? [] : [...(process.env[key] ?? "").split(path.delimiter), ...(await registryPath()), ...(await wingetPackageDirs())];
   const dirs = [...own, ...system]
     .map((d) => d.trim().replace(/^"|"$/g, ""))
     .filter((d) => {
@@ -92,10 +108,12 @@ export async function refreshTools(): Promise<Tools> {
       return true;
     });
 
-  const ytdlp = config.ytdlpPath ?? find("yt-dlp", dirs);
-  const deno = find("deno", dirs);
-  const ffmpeg = find("ffmpeg", dirs);
-  const winget = isWindows ? find("winget", dirs) : null;
+  const [ytdlp, deno, ffmpeg, winget] = await Promise.all([
+    config.ytdlpPath ?? find("yt-dlp", dirs),
+    find("deno", dirs),
+    find("ffmpeg", dirs),
+    isWindows ? find("winget", dirs) : null,
+  ]);
 
   // Put the tool folders first so yt-dlp itself finds Deno (YouTube challenges) and FFmpeg (HD merge).
   const toolDirs = [ytdlp, deno, ffmpeg].filter((p): p is string => !!p).map((p) => path.dirname(p));

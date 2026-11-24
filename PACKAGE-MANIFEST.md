@@ -1,3 +1,11 @@
+# Current package — prebuilt performance release
+
+`Musike_Performance_Release_20261124.zip` contains the source based on `musike-main (10).zip`, all approved performance changes, the compiled server and PWA, and `PERFORMANCE_RELEASE_AUDIT.md`. Extract the ZIP into a clean staging directory and follow `START_HERE.md`. Historical patches in the repository are reference material.
+
+`PERFORMANCE-RELEASE-SHA256.json` lists the SHA-256 of every other file in this release. The archive includes no runtime data, credentials, private SDK binaries or dependency directories.
+
+---
+
 # Current source package — background/offline revision, 20 November 2026
 
 Complete source based on upload `c1293caa1302c779b589289b6ba590c2d43f6caa`, with approved BUG-021–024/BUG-007 changes and Hermes BUG-018–020 retained. Use `Musike_Background_Offline_20261120.patch` only against that exact baseline, or use the full source ZIP. The patch is also included in the ZIP for review; choose one installation method. Do not apply the historical patches below.

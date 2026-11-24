@@ -173,8 +173,17 @@ export class Jams {
   async revokeUser(user: string, deleting: boolean) {
     const db = this.accounts.db;
     if (deleting) {
-      const owned = await db.all("SELECT id,json FROM jam_rooms WHERE owner_id=?", [user]);
-      for (const room of owned) { const state = cleanSnapshot(JSON.parse(room.json)); const members = await db.all("SELECT user_id FROM jam_members WHERE room_id=? AND user_id<>?", [room.id, user]); await Promise.all(members.map(m => this.sync.applyJam(m.user_id, { ...state, status: "paused" }))); }
+      const owned = await db.all<{ json: string; members: string }>(`
+        SELECT r.json, (
+          SELECT json_group_array(m.user_id) FROM jam_members m WHERE m.room_id=r.id AND m.user_id<>?
+        ) AS members FROM jam_rooms r WHERE r.owner_id=?
+      `, [user, user]);
+      for (const room of owned) {
+        const members: string[] = JSON.parse(room.members);
+        if (!members.length) continue;
+        const snapshot = { ...cleanSnapshot(JSON.parse(room.json)), status: "paused" as const };
+        await Promise.all(members.map(member => this.sync.applyJam(member, snapshot)));
+      }
     }
     const member = await db.get("SELECT room_id FROM jam_members WHERE user_id=?", [user]); if (member) { if (!deleting) await this.leave(user, member.room_id); else { const row = await this.row(member.room_id); if (row.host_id === user && row.owner_id !== user) await this.publish(row.id, { ...cleanSnapshot(JSON.parse(row.json)), status: "paused" }, null, user); } }
   }

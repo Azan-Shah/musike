@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { createWriteStream, existsSync } from "node:fs";
-import { chmod, cp, mkdir, readdir, rename, rm } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { access, chmod, cp, mkdir, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -106,7 +106,8 @@ export function ensureComponent(c: Component): Promise<void> {
       } else {
         // Windows 10+ and macOS ship bsdtar, which reads zip files.
         const tar = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
-        await exec(existsSync(tar) ? tar : "tar", ["-xf", tmp, "-C", out], { windowsHide: true });
+        const command = await access(tar).then(() => tar, () => "tar");
+        await exec(command, ["-xf", tmp, "-C", out], { windowsHide: true });
       }
       if (c === "deno") {
         await install(path.join(out, `deno${exe}`), path.join(bin, `deno${exe}`));

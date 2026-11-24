@@ -1,3 +1,27 @@
+# Current acceptance — prebuilt performance release, 24 November 2026
+
+- [x] Full Node 22 suite with 189 passing tests, including the previously affected process and playback tests.
+- [x] Library summary has playlist metadata and small artwork cards. Favorites membership remains complete and exact. One personal playlist or Favorites loads in full when opened.
+- [x] DOM fixture selects track 117 from page two and retains all 125 tracks in the correct playback order.
+- [x] Separate signed-in users cannot read a personal playlist, Favorites, summary, or membership from the other user's account.
+- [x] ZIP bundle boots using Node 22 with no dependency installation. Served HTML, built JS, manifest and service worker. Auth-off JSON and fresh auth-on SQLite both validated using synthetic data.
+- [x] Backup export shape and restore are preserved. Offline metadata reads, opt-in, history updates, legacy IndexedDB upgrade, and owner reset are covered by fixtures.
+- [ ] Stage using a copied live database and the existing environment. Refresh the PWA and check upgrade, cached audio, backup/restore, old-asset rollback and device takeovers.
+- [ ] Validate browser appearance, locked Android playback and provider connections on production-like devices before promotion.
+
+---
+
+# Current acceptance — performance overlay, 24 November 2026
+
+- [x] Synthetic auth-enabled share paging covers deduplication, permission precedence, membership revocation, owner scoping and invalid sizes.
+- [x] SQLite migration fixture verifies an existing database is backed up once, retained data survives reopen, four query plans use the new indexes and audit retention keeps 1,000 rows.
+- [x] React DOM fixture covers the 36-card page limit, navigating to the next page, offline metadata and download behavior.
+- [ ] Demo with a large playlist library on phone, desktop and TV. Verify filter, page navigation, focus in light/dark/custom themes, and the full queue when playing from a later track page.
+- [ ] Run auth-on and auth-off backup/restore, favourites/history, download/pin, Google and public import, sharing/revocation, and the existing physical playback and provider acceptance checks below.
+- [ ] Compare same-data API p50/p95 and browser interaction timings before and after. Confirm migration restart and test a matched server/web rollback in demo before promotion.
+
+---
+
 # Current acceptance — approved unresolved-issues revision, 24 November 2026
 
 Checked items below refer to automated fixtures/builds only. Historical checklists remain below.

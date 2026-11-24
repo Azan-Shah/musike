@@ -1,31 +1,35 @@
 import { useOffline } from "../stores/offline";
 import { OfflineStorage } from "../components/OfflineStorage";
 import { PlaylistImportDialog } from "../components/PlaylistImportDialog";
-import { socialState, type SocialState } from "../lib/social";
+import { IncomingShares } from "../components/IncomingShares";
+import { ListPager } from "../components/ListPager";
+import { useListPage } from "../hooks/useListPage";
 import { useSession } from "../stores/session";
 import { PlusIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Cover, type CoverKind } from "../components/Cover";
 import { NamePlaylistDialog } from "../components/Dialogs";
 import { PageHeader } from "../components/Page";
 import { useT } from "../i18n";
 import { paths } from "../lib/routes";
-import type { Track } from "../lib/types";
+import type { CoverArtwork } from "../../../server/src/librarySummary.js";
+import { api } from "../lib/api";
+import type { Library as FullLibrary, Track } from "../lib/types";
 import { useLibrary } from "../stores/library";
 
-function Entry({ to, name, kind, tracks, sub }: { to: string; name: string; kind: CoverKind; tracks: Track[]; sub: string }) {
+const Entry = memo(function Entry({ to, name, kind, tracks, sub }: { to: string; name: string; kind: CoverKind; tracks: CoverArtwork[]; sub: string }) {
   return (
     <li>
       <Link
         to={to}
-        className="group flex items-center gap-3 rounded-[16px] p-2 transition-colors hover:bg-surface-2 md:flex-col md:items-stretch md:gap-3 md:p-3"
+        className="group flex items-center gap-3 rounded-tile p-2 transition-colors hover:bg-surface-2 md:flex-col md:items-stretch md:gap-3 md:p-3"
       >
         <Cover
           kind={kind}
           tracks={tracks}
           iconSize={26}
-          className="size-16 shrink-0 rounded-[12px] md:aspect-square md:size-auto md:w-full md:rounded-[14px] md:shadow-[0_12px_32px_rgb(0_0_0/0.3)]"
+          className="size-16 shrink-0 rounded-art md:aspect-square md:size-auto md:w-full md:rounded-tile md:shadow-[0_12px_32px_rgb(0_0_0/0.3)]"
         />
         <span className="min-w-0">
           <span className="block truncate font-medium">{name}</span>
@@ -34,26 +38,52 @@ function Entry({ to, name, kind, tracks, sub }: { to: string; name: string; kind
       </Link>
     </li>
   );
-}
+});
+const EMPTY_TRACKS: Track[] = [];
 
 export default function Library({ downloads = false }: { downloads?: boolean }) {
   const offline = useSession(s => !!s.offline);
-  const entries = useOffline(s => s.summary?.entries);
-  const available = new Set(entries?.map(e => e.id));
+  const user = useSession(s => s.user?.id);
   const local = downloads || offline;
-  const target = (path: string) => downloads && !offline ? `${path}?downloads=1` : path;
-  const counts = (tracks: Track[]) => local ? t.offline.downloadedCount(tracks.filter(track => available.has(track.id)).length, tracks.length) : t.common.tracks(tracks.length);
-  const user = useSession(s => s.user);
+  const entries = useOffline(s => local ? s.summary?.entries : undefined);
+  const available = useMemo(() => new Set(entries?.map(e => e.id)), [entries]);
+  const downloaded = useMemo(() => entries?.map(entry => entry.track) ?? EMPTY_TRACKS, [entries]);
   const [importing, setImporting] = useState(false);
-  const [shares, setShares] = useState<SocialState["shares"]>([]);
-  useEffect(() => { let stopped = false; setShares([]); if (user && !offline && !downloads) void socialState().then(s => { if (!stopped) setShares(s.shares); }).catch(() => {}); return () => { stopped = true; }; }, [user?.id, offline, downloads]);
-  const favorites = useLibrary((s) => s.favorites);
-  const playlists = useLibrary((s) => s.playlists);
-  const history = useLibrary((s) => s.history);
-  const createPlaylist = useLibrary((s) => s.createPlaylist);
+  const favorites = useLibrary(s => s.favorites);
+  const playlists = useLibrary(s => s.playlists);
+  const history = useLibrary(s => s.history);
+  const favoriteCount = useLibrary(s => s.favoriteIds.size);
+  const status = useLibrary(s => s.status);
+  const revision = useLibrary(s => s.snapshotRevision);
+  const offlineDetails = useLibrary(s => offline ? s.details : undefined);
+  const load = useLibrary(s => s.load);
+  const [downloadSnapshot, setDownloadSnapshot] = useState<{ owner: string; library: FullLibrary }>();
+  const downloadLibrary = downloadSnapshot && downloadSnapshot.owner === user ? downloadSnapshot.library : undefined;
+  const [downloadError, setDownloadError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (!downloads || offline || !user || status !== "ready") return;
+    const request = new AbortController();
+    setDownloadError(false);
+    void api.library(request.signal).then(
+      data => { if (!request.signal.aborted) setDownloadSnapshot({ owner: user, library: data }); },
+      () => { if (!request.signal.aborted) setDownloadError(true); },
+    );
+    return () => request.abort();
+  }, [downloads, offline, user, revision, retry, status]);
+  const downloadDetails = useMemo(() => new Map(downloadLibrary?.playlists.map(p => [p.id, p])), [downloadLibrary]);
+  const createPlaylist = useLibrary(s => s.createPlaylist);
   const [creating, setCreating] = useState(false);
+  const [query, setQuery] = useState("");
+  const term = useDeferredValue(query.trim().toLocaleLowerCase());
+  const filtered = useMemo(() => term ? playlists.filter(p => p.name.toLocaleLowerCase().includes(term)) : playlists, [playlists, term]);
+  const page = useListPage(filtered, JSON.stringify(["library", user, local, term]), 36);
   const navigate = useNavigate();
   const t = useT();
+  const target = (path: string) => downloads && !offline ? `${path}?downloads=1` : path;
+  const counts = (total: number, tracks?: Track[]) => local && tracks
+    ? t.offline.downloadedCount(tracks.reduce((n, track) => n + Number(available.has(track.id)), 0), total)
+    : t.common.tracks(total);
 
   return (
     <div className="pb-8">
@@ -77,30 +107,43 @@ export default function Library({ downloads = false }: { downloads?: boolean }) 
       />
 
       {user && <section className="px-4 pt-3 md:px-6">{!local && <Link className="button-secondary" to={paths.offline}>{t.offline.open}</Link>}<OfflineStorage /></section>}
+      {status === "error" && <button type="button" className="button-secondary mx-4 mt-3" onClick={() => void load()}>{t.common.retry}</button>}
+      {downloads && !offline && user && !downloadLibrary && status === "ready" &&
+        (downloadError
+          ? <button type="button" className="button-secondary mx-4 mt-3" onClick={() => setRetry(retry + 1)}>{t.common.retry}</button>
+          : <p role="status" className="px-4 pt-3 text-sm text-fg-2">{t.common.loading}</p>)}
+      {playlists.length > 0 && <div className="px-4 pt-3 md:px-6">
+        <input type="search" aria-label={t.library.filterPlaylists} placeholder={t.library.filterPlaylists}
+          className="h-11 w-full max-w-sm rounded-full bg-surface-2 px-4 text-sm ring-1 ring-line-strong"
+          value={query} maxLength={200} onChange={e => setQuery(e.target.value)} />
+      </div>}
       <ul className="grid grid-cols-1 gap-1 px-2 pt-2 md:grid-cols-3 md:gap-2 md:px-4 lg:grid-cols-4 2xl:grid-cols-6">
-        {local && <Entry to={`${paths.offline}?view=tracks`} name={t.offline.allDownloaded} kind="history" tracks={entries?.map(entry => entry.track) ?? []} sub={t.common.tracks(entries?.length ?? 0)} />}
-        <Entry to={target(paths.favorites)} name={t.nav.favorites} kind="favorites" tracks={favorites} sub={counts(favorites)} />
-        <Entry to={target(paths.history)} name={t.nav.recentlyPlayed} kind="history" tracks={history} sub={counts(history)} />
-        {playlists.map((p) => (
+        {local && <Entry to={`${paths.offline}?view=tracks`} name={t.offline.allDownloaded} kind="history" tracks={downloaded} sub={t.common.tracks(downloaded.length)} />}
+        <Entry to={target(paths.favorites)} name={t.nav.favorites} kind="favorites" tracks={favorites} sub={counts(favoriteCount, offline ? favorites : downloadLibrary?.favorites)} />
+        <Entry to={target(paths.history)} name={t.nav.recentlyPlayed} kind="history" tracks={history} sub={counts(history.length, history)} />
+        {page.items.map((p) => (
           <Entry
             key={p.id}
             to={target(paths.playlist(p.id))}
             name={p.name}
             kind="playlist"
-            tracks={p.tracks}
-            sub={`${local ? counts(p.tracks) : t.library.playlistSub(p.tracks.length)}${p.origin ? ` · ${p.origin.provider === "youtube" ? t.collaboration.youtubePlaylist : p.origin.kind === "album" ? t.features.albumOrigin : t.features.playlistOrigin}` : ""}`}
+            tracks={p.cover}
+            sub={`${local ? counts(p.trackCount, (offline ? offlineDetails : downloadDetails)?.get(p.id)?.tracks) : t.library.playlistSub(p.trackCount)}${p.origin ? ` · ${p.origin.provider === "youtube" ? t.collaboration.youtubePlaylist : p.origin.kind === "album" ? t.features.albumOrigin : t.features.playlistOrigin}` : ""}`}
           />
         ))}
       </ul>
+      <ListPager {...page} total={filtered.length} />
+      {term && playlists.length > 0 && filtered.length === 0 &&
+        <p role="status" className="px-4 pt-6 text-sm text-fg-2 md:px-6">{t.library.noMatchingPlaylists}</p>}
 
-      {playlists.length === 0 && (
+      {status === "ready" && playlists.length === 0 && (
         <p className="px-4 pt-6 text-sm text-fg-2 md:px-6">
           {t.library.noPlaylists}
         </p>
       )}
 
       {user && <PlaylistImportDialog open={importing} onClose={() => setImporting(false)} />}
-      {shares.length > 0 && <section className="px-4 pt-4 md:px-6"><h2 className="font-semibold">{t.collaboration.sharedWithMe}</h2><ul className="flex flex-col gap-2 pt-3">{shares.map(s => <li key={s.id}><Link className="text-sm text-accent-text" to={`/shared/${s.id}`}>{s.name} · {s.owner.name || t.collaboration.member} · {t.common.tracks(s.tracks)}</Link></li>)}</ul></section>}
+      {user && !local && <IncomingShares key={user} />}
       <NamePlaylistDialog
         open={creating}
         title={t.nav.newPlaylist}

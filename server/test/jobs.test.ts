@@ -39,7 +39,9 @@ test("queued jobs expire without executing, and shutdown rejects waiting/new wor
 });
 
 test("process runner captures output and reports spawn failure", async () => {
-  const result = await runProcess(process.execPath, ["-e", "console.log('ok'); console.error('warning')"], process.env, 5000);
+  // This child only prints strings. Proxy initialization can add a Node warning to stderr.
+  const env = { ...process.env, NODE_USE_ENV_PROXY: "0" };
+  const result = await runProcess(process.execPath, ["-e", "console.log('ok'); console.error('warning')"], env, 5000);
   assert.equal(result.stdout.trim(), "ok");
   assert.equal(result.stderr.trim(), "warning");
   assert.equal(result.code, 0);

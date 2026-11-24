@@ -122,19 +122,19 @@ interface ListProps {
   tracks: Track[];
   /** Full list to queue when a row is played, if `tracks` is only a preview of it. */
   context?: Track[];
+  onSelect?: (track: Track) => void;
   playlistId?: string;
   showAlbum?: boolean;
   header?: boolean;
   downloads?: boolean;
 }
 
-export function TrackList({ tracks, context, playlistId, listKey, showAlbum: albumWanted = true, header = true, downloads = false }: ListProps) {
+export const TrackList = memo(function TrackList({ tracks, context, onSelect, playlistId, listKey, showAlbum: albumWanted = true, header = true, downloads = false }: ListProps) {
   const offline = useSession(s => !!s.offline);
-  const entries = useOffline(s => s.summary?.entries);
+  const entries = useOffline(s => offline || downloads ? s.summary?.entries : undefined);
   const available = useMemo(() => new Set(entries?.map(e => e.id)), [entries]);
   const playList = usePlayer((s) => s.playList);
-  const favorites = useLibrary((s) => s.favorites);
-  const favoriteIds = useMemo(() => new Set(favorites.map((track) => track.id)), [favorites]);
+  const favoriteIds = useLibrary(s => s.favoriteIds);
   const page = useListPage(tracks, listKey);
   const queue = context ?? tracks;
   const onPlay = useCallback((position: number) => {
@@ -144,10 +144,11 @@ export function TrackList({ tracks, context, playlistId, listKey, showAlbum: alb
       else void downloadOfflineTrack(track).then(() => toast(getT().offline.downloadQueued)).catch(error => toast(error.message, "error"));
       return;
     }
+    if (onSelect) { onSelect(track); return; }
     const playable = offline || downloads ? queue.filter(track => available.has(track.id)) : queue;
     if (offline || downloads) { usePlayer.getState().setPreferVideo(false); usePlayer.getState().setAutoRadio(false); }
     playList(playable, Math.max(0, playable.findIndex(item => item.id === track.id)));
-  }, [playList, queue, tracks, available, offline, downloads]);
+  }, [playList, queue, tracks, available, offline, downloads, onSelect]);
   const t = useT();
   // Pages ask for the album column where it makes sense; Settings can turn it off everywhere.
   const showAlbum = useAppearance((s) => s.albumColumn) && albumWanted;
@@ -190,7 +191,7 @@ export function TrackList({ tracks, context, playlistId, listKey, showAlbum: alb
       <ListPager {...page} total={tracks.length} />
     </div>
   );
-}
+});
 
 export function TrackListSkeleton({ rows = 8 }: { rows?: number }) {
   const t = useT();

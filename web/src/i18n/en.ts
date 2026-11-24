@@ -224,6 +224,8 @@ export const en = {
   },
 
   library: {
+    filterPlaylists: "Find playlists",
+    noMatchingPlaylists: "No matching playlists.",
     backup: "Library backup (export or import)",
     newShort: "New",
     create: "Create",

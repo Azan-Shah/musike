@@ -1,3 +1,4 @@
+import { summarizeLibrary } from "./librarySummary.js";
 import { msg } from "./i18n.js";
 import { HttpError, VIDEO_ID, type Library, type Playlist, type Track, type Origin } from "./types.js";
 
@@ -101,13 +102,50 @@ async function getLibrary(): Promise<Library> {
   return load();
 }
 
+async function getSummary() {
+  return summarizeLibrary(await load());
+}
+
+async function getFavorites() {
+  return (await load()).favorites;
+}
+
+async function getPlaylist(pid: string) {
+  return findPlaylist(await load(), pid);
+}
+
+async function playlistMembership(ids: string[]) {
+  const wanted = new Set(ids);
+  const matches: string[] = [];
+  for (const playlist of (await load()).playlists) {
+    if (playlist.tracks.length < wanted.size) continue;
+    const found = new Set<string>();
+    for (const track of playlist.tracks) {
+      if (!wanted.has(track.id)) continue;
+      found.add(track.id);
+      if (found.size !== wanted.size) continue;
+      matches.push(playlist.id);
+      break;
+    }
+  }
+  return matches;
+}
+
 /** Bounded response for callers browsing a large local collection. Full export remains getLibrary(). */
 async function getTrackPage(kind: "favorites" | "history" | "playlist", pid: string, offset: number, limit: number, q = "") {
   const lib = await load();
   const source = kind === "playlist" ? findPlaylist(lib, pid).tracks : lib[kind];
   const term = q.trim().toLocaleLowerCase();
-  const matches = term ? source.filter((t) => `${t.title} ${t.artist} ${t.album ?? ""}`.toLocaleLowerCase().includes(term)) : source;
-  return { tracks: matches.slice(offset, offset + limit), total: matches.length, offset, limit, hasMore: offset + limit < matches.length };
+  if (!term) return { tracks: source.slice(offset, offset + limit), total: source.length, offset, limit, hasMore: offset + limit < source.length };
+  const tracks: Track[] = [];
+  let total = 0;
+  for (const track of source) {
+    const text = `${track.title} ${track.artist} ${track.album ?? ""}`.toLocaleLowerCase();
+    if (!text.includes(term)) continue;
+    if (total >= offset && tracks.length < limit) tracks.push(track);
+    total++;
+  }
+  return { tracks, total, offset, limit, hasMore: offset + tracks.length < total };
 }
 
 async function addFavorite(track: Track): Promise<Track[]> {
@@ -311,7 +349,7 @@ async function importLibrary(input: unknown, mode: "merge" | "replace"): Promise
   return result;
 }
 
-return { deleteTrack, editPlaylist, useLibraryStorage, getLibrary, getTrackPage, addFavorite, addFavorites, removeFavorite, pushHistory, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, importLibrary };
+return { deleteTrack, editPlaylist, useLibraryStorage, getLibrary, getSummary, getFavorites, getPlaylist, playlistMembership, getTrackPage, addFavorite, addFavorites, removeFavorite, pushHistory, createPlaylist, renamePlaylist, deletePlaylist, addToPlaylist, removeFromPlaylist, importLibrary };
 }
 
 const sharedLibrary = createLibrary();
@@ -319,6 +357,10 @@ const sharedLibrary = createLibrary();
 
 export const useLibraryStorage = sharedLibrary.useLibraryStorage;
 export const getLibrary = sharedLibrary.getLibrary;
+export const getSummary = sharedLibrary.getSummary;
+export const getFavorites = sharedLibrary.getFavorites;
+export const getPlaylist = sharedLibrary.getPlaylist;
+export const playlistMembership = sharedLibrary.playlistMembership;
 export const getTrackPage = sharedLibrary.getTrackPage;
 export const addFavorite = sharedLibrary.addFavorite;
 export const addFavorites = sharedLibrary.addFavorites;

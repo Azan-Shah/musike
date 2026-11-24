@@ -1,3 +1,4 @@
+import type { LibrarySummary } from "../../../server/src/librarySummary.js";
 import type { FailureKind } from "./playbackDiagnostics";
 import type { AlbumCard, AlbumPage, ArtistPage, Genre, GenreArtist, GenrePage, Library, Playlist, Track } from "./types";
 
@@ -81,18 +82,22 @@ export interface MusikeApi {
   playbackSettings?(): Promise<{ lookahead: number; videoQuality: "sd" | "hd"; diagnostics?: boolean } >;
   prepare(id: string, signal?: AbortSignal): Promise<Prepared>;
 
-  library(): Promise<Library>;
-  addFavorite(t: Track): Promise<{ favorites: Track[] }>;
-  addFavorites(tracks: Track[]): Promise<{ favorites: Track[] }>;
-  removeFavorite(id: string): Promise<{ favorites: Track[] }>;
-  deleteTrack(id: string): Promise<Library>;
-  pushHistory(t: Track): Promise<{ history: Track[] }>;
-  createPlaylist(name: string, tracks?: Track[]): Promise<Playlist>;
-  renamePlaylist(id: string, name: string): Promise<Playlist>;
-  deletePlaylist(id: string): Promise<void>;
-  addToPlaylist(id: string, t: Track | Track[]): Promise<Playlist>;
-  removeFromPlaylist(id: string, trackId: string): Promise<Playlist>;
-  importLibrary(backup: unknown, mode: "merge" | "replace"): Promise<ImportResult>;
+  library(signal?: AbortSignal): Promise<Library>;
+  librarySummary(signal?: AbortSignal): Promise<LibrarySummary>;
+  libraryFavorites(signal?: AbortSignal): Promise<{ favorites: Track[] }>;
+  playlist(id: string, signal?: AbortSignal): Promise<Playlist>;
+  playlistMembership(ids: string[], signal?: AbortSignal): Promise<{ playlists: string[] }>;
+  addFavorite(t: Track, signal?: AbortSignal): Promise<{ favorites: Track[] }>;
+  addFavorites(tracks: Track[], signal?: AbortSignal): Promise<{ favorites: Track[] }>;
+  removeFavorite(id: string, signal?: AbortSignal): Promise<{ favorites: Track[] }>;
+  deleteTrack(id: string, signal?: AbortSignal): Promise<Library>;
+  pushHistory(t: Track, signal?: AbortSignal): Promise<{ history: Track[] }>;
+  createPlaylist(name: string, tracks?: Track[], signal?: AbortSignal): Promise<Playlist>;
+  renamePlaylist(id: string, name: string, signal?: AbortSignal): Promise<Playlist>;
+  deletePlaylist(id: string, signal?: AbortSignal): Promise<void>;
+  addToPlaylist(id: string, t: Track | Track[], signal?: AbortSignal): Promise<Playlist>;
+  removeFromPlaylist(id: string, trackId: string, signal?: AbortSignal): Promise<Playlist>;
+  importLibrary(backup: unknown, mode: "merge" | "replace", signal?: AbortSignal): Promise<ImportResult>;
 
   system(): Promise<SystemInfo>;
   updateYtdlp(channel: Channel): Promise<SystemJob>;

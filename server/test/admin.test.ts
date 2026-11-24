@@ -94,3 +94,35 @@ test("admin direct phone edit and hard deletion are role/CSRF guarded and revoke
     for (const url of ["/api/social", "/api/jams", "/api/playlist-imports"]) assert.equal((await f.call(url)).statusCode, 401);
   } finally { await f.cleanup(); }
 });
+
+test("incoming share pagination uses the signed-in owner and returns only bounded summaries", async () => {
+  const f = await fixture();
+  try {
+    const admin = await f.login(1);
+    const invite = (await f.call("/api/admin/invites", admin.cookie, {})).json().code;
+    const recipient = await f.login(2, invite);
+    const code = (await f.call("/api/social", recipient.cookie)).json().code;
+    assert.equal((await f.call("/api/social/friends", admin.cookie, { code })).statusCode, 200);
+    assert.equal((await f.call(`/api/social/requests/${admin.user.id}`, recipient.cookie, { accept: true })).statusCode, 200);
+    const group = (await f.call("/api/social/groups", admin.cookie, { name: "Fixture Group" })).json().id;
+    assert.equal((await f.call(`/api/social/groups/${group}`, admin.cookie, { member: recipient.user.id }, "PATCH")).statusCode, 200);
+    for (const name of ["First", "Second", "Third"]) {
+      const playlist = (await f.call("/api/playlists", admin.cookie, { name })).json();
+      assert.equal((await f.call("/api/social/shares", admin.cookie, { playlist: playlist.id, user: recipient.user.id, permission: "viewer" })).statusCode, 200);
+      assert.equal((await f.call("/api/social/shares", admin.cookie, { playlist: playlist.id, group, permission: "editor" })).statusCode, 200);
+    }
+    assert.equal((await f.call("/api/social/shares?limit=2")).statusCode, 401);
+    assert.equal((await f.call("/api/social/shares?limit=201", recipient.cookie)).statusCode, 400);
+    const first = (await f.call("/api/social/shares?limit=2", recipient.cookie)).json();
+    const last = (await f.call("/api/social/shares?limit=2&offset=2", recipient.cookie)).json();
+    assert.equal(first.hasMore, true);
+    assert.equal(last.hasMore, false);
+    const shares = [...first.shares, ...last.shares];
+    assert.equal(new Set(shares.map(s => s.id)).size, 3);
+    assert.ok(shares.every(s => s.permission === "editor" && s.owner.id === admin.user.id && s.tracks === 0 && !("playlist" in s)));
+    assert.deepEqual((await f.call("/api/social", recipient.cookie)).json().shares, shares);
+    assert.deepEqual((await f.call(`/api/social/shares?user=${recipient.user.id}`, admin.cookie)).json().shares, []);
+    await f.call(`/api/social/groups/${group}`, recipient.cookie, { member: recipient.user.id, remove: true }, "PATCH");
+    assert.ok((await f.call("/api/social/shares", recipient.cookie)).json().shares.every(s => s.permission === "viewer"));
+  } finally { await f.cleanup(); }
+});
