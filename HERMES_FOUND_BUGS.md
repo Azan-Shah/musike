@@ -1076,3 +1076,94 @@ Library editing, favorite mutations, imports, social/admin views and video/devic
 | BUG-027 / BUG-028 | Implemented in source as detailed above; actual audio/device and visual/PWA acceptance remain pending. |
 
 Verification: 165 tests pass, zero failed/skipped/cancelled; server/web TypeScript, production web/PWA and server bundle pass. Exact commands/environment and remaining acceptance are in TEST-RESULTS.md and ACCEPTANCE-CHECKLIST.md. Runtime dependencies/lockfile, CSS tokens, operator environment/compose, provider credentials and wrapper contents are unchanged. The only new server schema/API surface is account normalization preferences. No production deployment is claimed.
+## BUG-029 — NEW (Codex handoff): cross-device seek sync latency — live jam and normal multi-device playback (reported 2026-11-24)
+
+**Operator report:** when one device seeks, the other devices take too long to catch up to the new position. Wants the seek sync time improved in BOTH modes: live jam sessions and normal cross-device playback between devices on the same account.
+
+**Codex handoff context (verified against main @ 868704a):**
+- Seek is a validated sync command: `server/src/playbackSync.ts:44` accepts `seek` with one finite arg. Cross-device propagation rides the existing sync channel: `POST /api/playback/sync` and the SSE stream `GET /api/playback/updates?deviceId=...` (`web/src/lib/playbackSync.ts:159`).
+- Jam followers poll on a stepped timer: `web/src/lib/jams.ts:76` uses 1 000 ms (active), 5 000 ms (idle), **10 000 ms when `document.visibilityState === "hidden"`**. A backgrounded/locked follower can therefore learn about a seek up to ~10 s late. This poll cadence is the prime suspect; do not assume — instrument the real end-to-end seek catch-up latency on both surfaces first.
+- Jam takeover binds only after the grant lands: `playJamHere()` (`web/src/lib/jams.ts:51`) polls every 300 ms for the transfer grant before binding the jam (see BUG-031 for the grant-wait itself).
+- Non-jam multi-device state rides the view/epoch/revision model (`web/src/lib/playbackSync.ts:14,54,61-62`); command dispatch is `web/src/lib/playbackCommands.ts`.
+
+**Codex scope:** measure, then reduce, seek catch-up latency in both modes. Candidate levers: push the seek as a server-initiated SSE event instead of waiting for the next poll tick; lower the hidden-tab poll interval for command-bearing channels (balance against battery — document the tradeoff); reconcile position/velocity immediately on receive instead of at the next heartbeat. Constraints: epoch fencing, stale-takeover and output-grant semantics from BUG-013/BUG-018 must hold; jam media must keep using the shared jam timeline, never a private one. Regression: typecheck, production web/PWA build, existing test suite pass; operator acceptance on real devices in both modes.
+
+## BUG-030 — NEW (Codex handoff): device identity — page refresh spawns a NEW device; generic "phone/web browser" names (reported 2026-11-24)
+
+**Operator report:** two defects in the device list. (1) The device names are generic — "mobile/web browser" — instead of the actual device name. (2) Every page refresh creates a NEW device entry instead of reusing the existing device in the list.
+
+**Codex handoff context (verified against main @ 868704a):** both symptoms trace to the same registration path in `web/src/lib/playbackSync.ts`:
+- Fresh identity per page load: line 34 mints `const documentClientId = crypto.randomUUID();` — every reload is a brand-new client, so every refresh registers as a new device.
+- Generic naming at registration: line 155 registers the device with `name: /Android|iPhone|iPad/.test(navigator.userAgent) ? getT().features.phoneDevice : getT().features.browserDevice` — a two-way UA sniff that yields exactly the generic labels the operator sees.
+
+**Codex scope:**
+- Persist the device id across reloads (localStorage/IndexedDB, keyed per account) so a returning tab re-registers the SAME device. Define the identity semantics explicitly (per browser install vs per account+browser) and document them. Check the server registry (`server/src/playbackSync.ts`) for stale-device pruning and make sure a reused id cannot inherit a grant it no longer owns — preserve the `rememberOutput` / transfer fencing (`web/src/lib/playbackSync.ts:62`).
+- Human-readable device names: derive from UA / userAgentData (e.g. "Samsung A07 · Chrome Android"), optionally operator-editable per device. Keep the i18n pattern (`features.phoneDevice`/`browserDevice` keys in `web/src/i18n/en.ts`; add new keys to en.ts only).
+- Verify the refresh/re-register path against active grants and transfers: a tab that refreshes mid-playback must not silently steal or orphan output.
+- Regression: typecheck, production web/PWA build, test suite pass; operator acceptance on phone + desktop, including refresh-mid-playback.
+
+## BUG-031 — NEW (Codex handoff): takeover of output should be immediate (reported 2026-11-24)
+
+**Operator report:** taking over playback/output on another device should happen immediately. Currently there is a visible wait before the takeover lands.
+
+**Codex handoff context (verified against main @ 868704a):**
+- The wait is partly by design: `web/src/lib/playbackSync.ts:97-99` — the transfer grant requires the OLD device's state to read paused/idle first; an immediate ack would snapshot "playing" and the grant would be refused until the state settles. The takeover latency is the suspend→ack round trip.
+- `playJamHere()` polls for the grant in 300 ms steps (`web/src/lib/jams.ts:51-60`); jam polling drops to 10 s when hidden (`jams.ts:76`). Prior handover notes put the jam takeover grant timeout at ~30 s — verify the current bound before relying on it.
+
+**Codex scope:** make takeover feel immediate WITHOUT breaking the pause-ack fence (the BUG-013 deadlock fixes and BUG-018 stale-grant fixes must hold). Candidates: push-based suspend/ack over the SSE channel instead of polling; optimistic UI takeover with explicit rollback if the grant is refused; a short ack deadline with a visible "waiting for the old device" state instead of a silent stall. Regression: typecheck/build/tests; operator times takeover phone↔desktop and inside a jam.
+
+## BUG-032 — NEW (Codex handoff): downloads — Favourites playlist downloadable, delete individual songs, visible download progress (reported 2026-11-24)
+
+**Operator report:** three download/library asks. (1) Allow downloading the Favourites playlist for offline use. (2) Allow deleting an individual song from the library. (3) Show progress for downloaded songs.
+
+**Codex handoff context (verified against main @ 868704a):**
+- Per-playlist offline pinning already exists: `web/src/components/OfflineStorage.tsx:37` `OfflinePlaylistButton({ playlist })` drives `pinOfflinePlaylist`/`unpinOfflinePlaylist` (`web/src/lib/offlineDownloads.ts`) with pending/ready/updated states. It is surfaced in the storage/settings UI, not attached to the Favourites collection.
+- Favourites is a virtual collection: BUG-028's implementation keeps Favorites visible in the offline experience via owner-scoped opt-in metadata (`web/src/lib/offlineStore.ts` `offlineSummary()` entries/pins).
+- Per-song library delete does NOT exist: `server/src/library.ts:303` exports `addFavorite/addFavorites/removeFavorite/pushHistory/createPlaylist/renamePlaylist/deletePlaylist/addToPlaylist/removeFromPlaylist/importLibrary` — no per-track library delete. `web/src/components/TrackList.tsx` exposes only the favourite toggle (:93-94). `removeFromPlaylist` exists for playlist membership only.
+- A bounded explicit download queue (cap 100, pending/ready states) already exists from BUG-028.
+
+**Codex scope:**
+- Expose the pin/download action for the Favourites collection with the same pin semantics (eviction protection, pending/ready states) as any playlist.
+- Add per-track delete: new endpoint in the shared-library API (`server/src/library.ts`) + UI affordance in TrackList/Library with confirmation. Define the cascade explicitly: playlist memberships, favourites, history, and the offline cached body (deleted tracks must be evicted under BUG-023 invariants — music-only, 64 MiB admission, budget/pin rules, logout purge).
+- Surface per-track download progress in the download UI (byte/track counts; build on the existing queue's pending/ready states rather than a parallel mechanism).
+- i18n keys in `web/src/i18n/en.ts` only. Regression: typecheck, production web/PWA build, test suite pass; operator acceptance on the PWA.
+
+## BUG-033 — NEW (Codex handoff): YouTube import must miss zero songs; visible per-track import progress (reported 2026-11-24)
+
+**Operator report:** the YouTube import feature should not miss any song — the songs are all on YouTube anyway, so misses are resolvable. Import progress must be visible for every track.
+
+**Codex handoff context:** import history in this log is long — BUG-015 delivered public playlist-link import (progress, checkpoints, dedup) and BUG-002 recorded Takeout import misses (387 not-found, no fuzzy matching). Verified surfaces at main @ 868704a: `server/src/playlistImport.ts` + `server/src/playlistImportRoutes.ts` (link import pipeline), `server/src/importMatching.ts` (track matching), `server/src/googleImport.ts` (Takeout). The compact mobile import dialog from BUG-024 must be preserved.
+
+**Codex scope:**
+- Audit WHY tracks are missed on a public playlist import (matcher misses vs provider resolution vs dedup vs transient provider failures) and close the gap: target zero unexplained misses for valid public playlists. Any track that genuinely cannot be resolved must be REPORTED with a reason in the import result, never silently skipped.
+- Keep the retry/backoff discipline from BUG-022 (no unbounded retry storms against the provider; respect the yt-dlp wrapper contract — BUG-005).
+- Ensure per-track progress is visibly reported during import (per-track state: queued/resolving/matched/failed-with-reason) inside the existing import dialog UI.
+- Regression: typecheck, production build, server tests pass; operator supplies a real playlist for acceptance (BUG-015's "real playlist acceptance pending" folds into this entry).
+
+## BUG-034 — NEW (Codex handoff): every setting synced between devices on the same account (reported 2026-11-24)
+
+**Operator report:** every setting should sync between devices in the same account — changing a setting on one device should apply on the others.
+
+**Codex handoff context (verified against main @ 868704a):** BUG-027 already established the exact pattern to generalize: the audio-normalization choice is account-scoped via an owner-scoped API (`server/src/accountRoutes.ts`, `accounts.ts`, `db.ts`), propagated to other connected devices through the existing 15-second presence responses or the next login/reconnect, with increasing per-owner revisions so stale heartbeat responses can never revert a newer preference. Offline devices use the last synced value and cannot change server settings.
+
+**Codex scope:**
+- Inventory ALL settings and split them into account-shared (theme, language, normalization, and similar preferences) vs device-local (offline budget/storage, output/queue state — these must NOT sync).
+- Generalize the owner-scoped preference mechanism from BUG-027 to the account-shared set, keeping the revision fencing (stale devices must not revert newer values; conflicts resolve to the newest revision).
+- Preserve the BUG-027 constraint that offline devices cannot mutate server settings, and the auth-off fallback (local-only preferences, no SQLite open).
+- Regression: typecheck, production web/PWA build, server tests pass; acceptance = change a setting on device A, verify it lands on device B within the presence heartbeat window (or on next reconnect).
+
+## BUG-007 / BUG-022 — dated amendment (2026-11-24): locked-screen advance improved to current+next; THIRD track kills media controls and audio; unlock auto-resume regressed
+
+**Operator report (physical Samsung A07, prod PWA):**
+
+- PROGRESS: while the screen is locked, the current song and the NEXT song now play without any issue — manual advance works where it previously failed. Operator: "we're on the right path, just need to improve upon it."
+- REMAINING defect: on the THIRD track, the media-control notification dies AND the audio stops with it. Consistent: current+next fine, third track dead.
+- NEW regression: unlocking the phone NO LONGER auto-resumes playback. Previously (and per the standing 2026-11-23 operator guidance) playback resumed instantly on unlock and kept playing seamlessly; now it does not.
+
+**Analysis leads for Codex (NOT verified — starting points):**
+- The three-track pattern aligns suspiciously well with the preload design from the 2026-11-23 source recovery ("prepare up to three complete upcoming network bodies, nearest first"). Suspect the window-advance path: when the third body becomes active, something in the window lifecycle tears down the Media Session metadata/position state (`web/src/lib/mediaSession.ts`) or the audio element (`web/src/lib/audio.ts`), killing the notification AND audio together. Check `playbackCanOutput()` gating and duplicate/stale ended-task rejection on the third advance.
+- Unlock auto-resume: check the Media Session play-intent path on visibilitychange/unlock. The standing source-recovery behavior retains the play intent during error probing, but the resume-after-third-track-death path may never reach it (the notification is already gone, so there is no Media Session surface to resume from). Determine whether resume-on-unlock is expected to come from the app (visibilitychange handler) or the OS (media notification) and cover both.
+- The standing decision (no service-worker music scheduler, no wake lock, no silent keepalive) STANDS unless this new evidence changes the calculus; document any re-evaluation either way.
+- A fresh diagnostic export covering a third-track death + unlock cycle would pin this down; reconcile against `playbackDiagnostics` events as before.
+
+Physical Samsung A07 acceptance for both the third-track defect and the unlock auto-resume regression remains OPEN.
