@@ -16,11 +16,11 @@ async function fixture() {
   const accounts = await Accounts.open({ adminPhone: "60120000001", secret: "youtube-history-fixture-".repeat(3) });
   const user = (await accounts.db.get("SELECT id FROM users"))!.id as string;
   const calls: { kind: "start" | "history" | "watchtime"; id: string; ping?: WatchPing }[] = []; const cookies: string[] = []; const logs: Record<string, unknown>[] = [];
-  let clock = 1_000_000; let reject = false;
+  let clock = 1_000_000; let reject = false; let startReject = false;
   const factory: HistoryClientFactory = async (cookie) => {
     cookies.push(cookie); if (reject) throw new Error("rejected");
     return { account: async () => "Fixture Account",
-      start: async (id) => { calls.push({ kind: "start", id }); return { history: async () => { calls.push({ kind: "history", id }); }, watchtime: async (ping) => { calls.push({ kind: "watchtime", id, ping }); } }; } };
+      start: async (id) => { calls.push({ kind: "start", id }); if (startReject) throw new Error("start rejected"); return { history: async () => { calls.push({ kind: "history", id }); }, watchtime: async (ping) => { calls.push({ kind: "watchtime", id, ping }); } }; } };
   };
   const history = new YouTubeHistory(accounts, factory, (event) => logs.push(event), () => clock, true);
   const snap = (track: ReturnType<typeof song> | null, position: number, status: PlaybackSnapshot["status"] = "playing", repeat: PlaybackSnapshot["repeat"] = "off"): PlaybackSnapshot =>
@@ -33,7 +33,7 @@ async function fixture() {
     await accounts.db.get("SELECT 1");
     await history.flush();
   };
-  return { accounts, user, history, calls, cookies, logs, snap, at, setReject: (value: boolean) => { reject = value; },
+  return { accounts, user, history, calls, cookies, logs, snap, at, setReject: (value: boolean) => { reject = value; }, setStartReject: (value: boolean) => { startReject = value; },
     cleanup: async () => { await history.close(); await accounts.close(); config.dataDir = old; await rm(dir, { recursive: true, force: true }); } };
 }
 
@@ -105,5 +105,20 @@ test("quick skips are not added to history and unlinked users send nothing", asy
     await f.at(10, f.snap(song("eeeeeeeeeee"), 0)); await f.at(15, f.snap(song("eeeeeeeeeee"), 5));
     await f.at(16, f.snap(song("fffffffffff"), 0));
     assert.deepEqual(f.calls.map((c) => c.kind), ["start", "start"]);
+  } finally { await f.cleanup(); }
+});
+
+test("a failed start drops the cached client so the next play self-heals", async () => {
+  const f = await fixture(); const a = song("ggggggggggg");
+  try {
+    await f.history.connect(f.user, COOKIE);
+    f.setStartReject(true);
+    await f.at(0, f.snap(a, 0)); await f.at(5, f.snap(a, 5));
+    assert.deepEqual(f.calls.filter((c) => c.kind === "start").map((c) => c.id), ["ggggggggggg"]);
+    assert.equal(f.logs.filter((l) => l.event === "youtube_history.start_failed").length, 1);
+    f.setStartReject(false);
+    await f.at(70, f.snap(song("hhhhhhhhhhh"), 0)); // past the 60s retry backoff
+    assert.deepEqual(f.calls.filter((c) => c.kind === "start").map((c) => c.id), ["ggggggggggg", "hhhhhhhhhhh"]);
+    assert.equal(f.cookies.length, 2, "the poisoned client was dropped and rebuilt fresh");
   } finally { await f.cleanup(); }
 });

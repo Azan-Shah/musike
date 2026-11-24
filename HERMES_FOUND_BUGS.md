@@ -33,6 +33,7 @@ below includes reproduction steps and captured evidence.
 | BUG-022 | Ordinary locked playlist/radio notification/audio loss | SOURCE LIFECYCLE FIX IMPLEMENTED — Samsung acceptance pending | 2026-11-20 |
 | BUG-023 | Persistent audio-only offline music and storage budget | IMPLEMENTED IN SOURCE — offline/storage/auth fixtures pass; real PWA acceptance pending | 2026-11-20 |
 | BUG-024 | Compact mobile playlist import presentation | RESOLVED IN SOURCE — existing bottom-sheet scrolling retained; visual acceptance pending | 2026-11-20 |
+| BUG-035 | YouTube history start_failed leaves the cached client poisoned until restart | HERMES FIX — self-heal on start_failed; prod deploy + live sync acceptance pending | 2026-11-24 |
 ---
 
 > Current dispositions are in the index and the dated follow-up below. Original reports retain their historical wording/status as evidence. “Resolved in source” does not certify a live provider, tunnel or physical-device acceptance test.
@@ -1208,3 +1209,32 @@ Google renderer mapping now retains endpoint-only IDs and numeric durations, and
 Account preferences extend the existing owner-scoped API and worker storage. Partial preference patches merge without overwriting unrelated fields; revisions increase under the existing per-owner lock. Server state applies without write-back loops, and older responses cannot replace a newer revision. Existing server values win at login; absent settings are established by an explicit save, not automatic upload of old device defaults. Offline edits are reverted and explained; auth-off stays local and does not open SQLite.
 
 Earlier resolved implementations remain retained. BUG-001's historical provider/token mechanism, BUG-004/006 live incident causality, and outstanding Google/Discord/device/Docker/operator acceptance are not newly certified. See TEST-RESULTS.md, REVISION-20261124-IMPACT.md, ARCHITECTURE.md section 10 and the current acceptance section. No deployment occurred.
+
+## BUG-035 — YouTube history start_failed leaves the cached client poisoned until restart
+
+**Found:** 2026-11-24 by the Hermes agent, while debugging live history-sync failures in production.
+**Surface:** Musike server `src/youtubeHistory.ts` (`track()`), YouTube Music history cookie link (user-linked 15:25 UTC, 2026-11-24).
+
+### Observed behaviour
+
+- Four consecutive plays in the 15:25–15:29 window logged `youtube_history.start_failed`; no history entries or watch-time pings were recorded for those plays.
+- From ~15:30 the same cached client began succeeding again with no change on the Musike side; sync recovered only because plays resumed, not because the code healed.
+
+### Root cause
+
+`YouTubeHistory.track()` catches a failed `client.start()` and only logs `start_failed`. The per-user client stays cached, so every later play keeps reusing it: a poisoned session (e.g. a bad visitor bucket behind a stale connection) keeps failing start until the container restarts. The sibling path — client *creation* (`link().client.catch`) — already drops the link and sets a 5-minute retry backoff (`client_failed`); the start path had no equivalent recovery.
+
+Probes inside the prod container ruled out cookies, library version, node and network: the same cookie and library reproduced and then stopped failing with identical inputs, i.e. a transient YouTube-side response (`getInfo` returned a `Message` element where the parser expects `SectionList | MusicQueue | RichGrid`).
+
+### Fix
+
+In the `start_failed` catch, when the user's link is unchanged (`this.links.get(user) === link`), drop the cached client and set a 60-second retry backoff — mirroring `client_failed` with a shorter window, since a start failure is usually a per-request flake rather than a revoked cookie. The next play after the backoff rebuilds a fresh client (new visitor bucket) and self-heals. Pings of the failed play are dropped (its handle resolves to null and `send()` no-ops), which is the expected, bounded cost.
+
+Regression test: a rejected `start` leaves exactly one `start_failed` log; the next track after the 60-second backoff builds a fresh client (factory called twice) and starts normally.
+
+### Verification
+
+- Containerized `node --import tsx --test` suite + `tsc --noEmit` pass on the commit carrying this change.
+- Prod deploy of this fix verified for image tag, health and public URL; live history-sync acceptance (play ≥10s, check YT Music history) remains with the user.
+
+REVIEW REQUESTED — focus: (1) the 60-second backoff constant (vs 5 minutes for client_failed); (2) the link-unchanged guard (a cookie re-link mid-play is preserved); (3) plays during the backoff window are not recorded (accepted cost).

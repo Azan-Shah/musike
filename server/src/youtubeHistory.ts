@@ -144,7 +144,8 @@ export class YouTubeHistory {
     if (!play) {
       if (!playing) return;
       const length = [snapshot.duration, track.duration].find((v) => Number.isFinite(v) && v > 0) ?? 0;
-      const handle = link.client.then((client) => client.start(track.id)).catch(() => { this.log({ event: "youtube_history.start_failed", user }); return null; });
+      // A start that never lands usually leaves the cached client poisoned (bad visitor bucket); drop it so the next play rebuilds a fresh client instead of failing until restart (mirrors client_failed).
+      const handle = link.client.then((client) => client.start(track.id)).catch(() => { this.log({ event: "youtube_history.start_failed", user }); if (this.links.get(user) === link) { this.links.set(user, null); this.retryAt.set(user, this.now() + 60_000); } return null; });
       play = { id: track.id, title: track.title, artist: track.artist, length, handle, chain: Promise.resolve(), startedAt: now, listened: 0,
         segStart: pos, lastPos: pos, lastAt: now, lastPing: now, historySent: false };
       this.plays.set(user, play);
