@@ -65,19 +65,14 @@ int main() {
         // Member list shows "♫ <artist>" like Spotify instead of "Listening to Musike".
         presence.SetStatusDisplayType(discordpp::StatusDisplayTypes::State);
         presence.SetDetails(activity->at("title").get<std::string>());
-        bool paused = activity->value("playback", std::string("playing")) == "paused";
-        std::string repeat = activity->value("repeat", std::string("off"));
-        // The state line is also what the member list shows ("♫ millsage · Paused"), so the mode is visible without opening the profile.
-        std::string state = activity->at("artist").get<std::string>();
-        if (paused) state += " · Paused";
-        else if (repeat == "one") state += " · On repeat";
-        presence.SetState(state);
+        // Pause and repeat show as a badge on the cover (small image), so the state line is just the artist.
+        presence.SetState(activity->at("artist").get<std::string>());
         std::string url = activity->value("url", "");
         if (!url.empty()) presence.SetDetailsUrl(url);
-        // Playing: start + end = progress bar with elapsed and total time. Paused: no timestamps, so no running timer.
+        // Start + end = progress bar. The server sends a future start while paused so the bar stays still at 0:00.
         int64_t start = activity->at("startedAt").get<int64_t>();
         int64_t end = activity->value("endsAt", static_cast<int64_t>(0));
-        if (!paused && start > 0) {
+        if (start > 0) {
           discordpp::ActivityTimestamps timestamps;
           timestamps.SetStart(start);
           if (end > start) timestamps.SetEnd(end);

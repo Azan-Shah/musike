@@ -119,6 +119,6 @@ test("a failed start drops the cached client so the next play self-heals", async
     f.setStartReject(false);
     await f.at(70, f.snap(song("hhhhhhhhhhh"), 0)); // past the 60s retry backoff
     assert.deepEqual(f.calls.filter((c) => c.kind === "start").map((c) => c.id), ["ggggggggggg", "hhhhhhhhhhh"]);
-    assert.equal(f.cookies.length, 2, "the poisoned client was dropped and rebuilt fresh");
+    assert.equal(f.cookies.length, 3, "connect check, first client, then the poisoned client rebuilt fresh");
   } finally { await f.cleanup(); }
 });

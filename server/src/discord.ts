@@ -11,8 +11,12 @@ type Activity = { title: string; artist: string; album: string; artwork: string;
 export const PAUSED_PRESENCE_MS = 5 * 60_000;
 /** The sidecar drops workers it hasn't heard from in 60 s, so unchanged cards are re-sent this often. */
 const REFRESH_MS = 30_000;
-/** Small-image badge: an art asset key from the Discord Developer Portal or an https URL. */
-const icon = (value: string | undefined) => value && (/^[a-z0-9_-]{1,64}$/.test(value) || /^https:\/\/\S{1,480}$/.test(value)) ? value : "";
+/** How far ahead a paused card's start is placed so its bar stays still (longer than any pause it is shown for). */
+const FROZEN_AHEAD = 24 * 60 * 60;
+/** Small-image badge on the cover: an art asset key from the Discord Developer Portal, an https URL, or "off". */
+const icon = (value: string) => value !== "off" && (/^[a-z0-9_-]{1,64}$/.test(value) || /^https:\/\/\S{1,480}$/.test(value)) ? value : "";
+/** Default badges ship in web/public/presence and are loaded from GitHub, which Discord can always reach. */
+const ICON_BASE = "https://raw.githubusercontent.com/Azan-Shah/musike/main/web/public/presence";
 /** OAuth and encrypted credentials stay in the server. Only an internal authenticated service sees access tokens. */
 export class DiscordService {
   readonly configured: boolean;
@@ -26,7 +30,8 @@ export class DiscordService {
     this.redirectUri = options.redirectUri ?? process.env.DISCORD_REDIRECT_URI ?? (accounts.origin ? `${accounts.origin}/api/discord/callback` : "");
     this.presenceUrl = options.presenceUrl ?? process.env.DISCORD_PRESENCE_URL ?? ""; this.presenceKey = options.presenceKey ?? process.env.DISCORD_PRESENCE_KEY ?? "";
     this.transport = options.transport ?? fetch;
-    this.pausedIcon = icon(options.pausedIcon ?? process.env.DISCORD_ICON_PAUSED); this.repeatIcon = icon(options.repeatIcon ?? process.env.DISCORD_ICON_REPEAT);
+    this.pausedIcon = icon(options.pausedIcon ?? process.env.DISCORD_ICON_PAUSED ?? `${ICON_BASE}/paused.png`);
+    this.repeatIcon = icon(options.repeatIcon ?? process.env.DISCORD_ICON_REPEAT ?? `${ICON_BASE}/repeat-one.png`);
     this.configured = !!(this.clientId && this.clientSecret && this.redirectUri && this.presenceUrl && this.presenceKey.length >= 32);
     if (this.configured) {
       const redirect = new URL(this.redirectUri); const service = new URL(this.presenceUrl);
@@ -90,13 +95,15 @@ export class DiscordService {
     if (track && (playing || snapshot.status === "paused")) {
       const known = [snapshot.duration, track.duration].find((value) => Number.isFinite(value) && value > 0);
       const duration = known ? Math.round(known) : 0;
-      // Playing: start and end together make Discord draw a Spotify-style progress bar. Paused: no timer, so the bar stops.
-      const startedAt = playing ? Math.floor(Date.now() / 1000 - snapshot.position) : 0;
+      // Playing: start and end together make Discord draw a Spotify-style progress bar.
+      // Paused: Discord has no paused state and can't pin the bar mid-song, so the start is set in the future,
+      // which shows a still bar at 0:00 with the song length (the same trick other music presence apps use).
+      const startedAt = playing ? Math.floor(Date.now() / 1000 - snapshot.position) : Math.floor(Date.now() / 1000) + FROZEN_AHEAD;
       const repeat = snapshot.repeat;
       const smallImage = !playing ? this.pausedIcon : repeat === "one" ? this.repeatIcon : "";
       const smallText = !playing ? "Paused" : repeat === "one" ? "On repeat" : repeat === "all" ? "Repeating queue" : "";
       activity = { title: track.title, artist: track.artist, album: track.album ?? "", artwork: track.art || track.thumb,
-        url: `https://music.youtube.com/watch?v=${track.id}`, startedAt, endsAt: playing && duration ? startedAt + duration : 0,
+        url: `https://music.youtube.com/watch?v=${track.id}`, startedAt, endsAt: duration ? startedAt + duration : 0,
         playback: playing ? "playing" : "paused", repeat, smallImage, smallText };
     }
     let state = this.latest.get(user);
