@@ -54,6 +54,7 @@ export function BackupSection() {
         r.playlistsAdded && t.backup.newPlaylists(r.playlistsAdded),
         r.playlistsMerged && t.backup.updatedPlaylists(r.playlistsMerged),
         r.tracksAdded && t.backup.addedTracks(r.tracksAdded),
+        r.skipped && t.backup.skippedRows(r.skipped),
         r.favoritesAdded && t.backup.addedFavorites(r.favoritesAdded),
       ].filter((p): p is string => !!p);
       toast(parts.length ? t.backup.imported(parts) : t.backup.nothingNew);

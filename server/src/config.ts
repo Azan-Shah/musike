@@ -4,6 +4,12 @@ import path from "node:path";
 // Folder of the server package (bundled builds pass every path through env instead).
 const root = typeof import.meta.url === "string" ? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..") : process.cwd();
 
+const cacheMib = Number(process.env.MUSIKE_CACHE_MAX_MB ?? 2048);
+const cacheMaxBytes = Math.round(cacheMib * 1024 * 1024);
+if (process.env.MUSIKE_CACHE_MAX_MB?.trim() === "" || !Number.isSafeInteger(cacheMaxBytes) || cacheMib < 0) {
+  throw new Error("MUSIKE_CACHE_MAX_MB must specify a valid non-negative cache size");
+}
+
 export const config = {
   audioQuality: (process.env.MUSIKE_AUDIO_QUALITY === "high" ? "high" : "standard") as "standard" | "high",
   videoQuality: (process.env.MUSIKE_VIDEO_QUALITY === "hd" ? "hd" : "sd") as "sd" | "hd",
@@ -17,16 +23,16 @@ export const config = {
   dataDir: process.env.MUSIKE_DATA_DIR ?? path.join(root, "data"),
   cacheDir: process.env.MUSIKE_CACHE_DIR ?? path.join(root, "cache"),
   /** Shared media cache budget; unneeded/farthest queue entries are evicted first. */
-  cacheMaxBytes: Number(process.env.MUSIKE_CACHE_MAX_MB ?? 2048) * 1024 * 1024,
+  cacheMaxBytes,
   webDist: process.env.MUSIKE_WEB_DIST ?? path.resolve(root, "..", "web", "dist"),
   /**
-   * Private folder for yt-dlp, Deno and FFmpeg downloaded by Musike itself (the desktop app sets it).
+   * Private folder for yt-dlp, Deno and FFmpeg downloaded by Musike itself.
    * Searched before the system PATH, and where "Instalar" puts the tools when set.
    */
   binDir: process.env.MUSIKE_BIN_DIR || null,
   /** YouTube Music language when a request doesn't say (the app always does). */
   lang: process.env.MUSIKE_LANG ?? "en",
   location: process.env.MUSIKE_LOCATION ?? "BR",
-  /** HTTP for youtubei.js; the platform's own fetch here (the Android app passes its native one). */
+  /** Optional HTTP transport for youtubei.js. */
   fetch: undefined as typeof fetch | undefined,
 };

@@ -202,8 +202,8 @@ export function TrackListSkeleton({ rows = 8 }: { rows?: number }) {
           <span className="hidden w-7 md:block" />
           <span className="skeleton size-11 rounded-[10px]" />
           <span className="flex flex-1 flex-col gap-2">
-            <span className="skeleton h-3.5 rounded-full" style={{ width: `${46 + ((i * 17) % 38)}%` }} />
-            <span className="skeleton h-3 rounded-full" style={{ width: `${22 + ((i * 11) % 20)}%` }} />
+            <span className={cn("skeleton h-3.5 rounded-full", i % 2 ? "w-3/5" : "w-2/3")} />
+            <span className={cn("skeleton h-3 rounded-full", i % 2 ? "w-1/3" : "w-1/4")} />
           </span>
         </li>
       ))}

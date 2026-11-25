@@ -1,3 +1,4 @@
+import { rememberResponseLoudness } from "./audioNormalizationCore";
 import { recordPlayback, responseFailure } from "./playbackDiagnostics";
 
 /** One complete next-track body; independent of the browser's advisory media preload budget. */
@@ -64,7 +65,7 @@ export class PlaybackPreload {
       } finally { await reader.cancel().catch(() => {}); }
       if (!bytes || length > 0 && bytes !== length) { reason = "incomplete_body"; throw new Error("incomplete"); }
       if (controller.signal.aborted || this.pending !== job) return;
-      const blob = new Blob(chunks, { type: response.headers.get("content-type")! });
+      const blob = rememberResponseLoudness(new Blob(chunks, { type: response.headers.get("content-type")! }), response);
       this.ready = { id, trace, url: URL.createObjectURL(blob), blob };
       this.complete?.(id, blob);
       recordPlayback("player.preload_complete", { videoId: id, traceId: trace });

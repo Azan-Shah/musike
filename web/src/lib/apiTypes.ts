@@ -20,6 +20,7 @@ export interface ImportResult {
   playlistsAdded: number;
   playlistsMerged: number;
   tracksAdded: number;
+  skipped?: number;
   favoritesAdded: number;
 }
 
@@ -54,16 +55,6 @@ export interface Prepared {
   title: string;
   duration: number;
   hasSdVideo: boolean;
-}
-
-/**
- * The operating system's media controls (notification, lock screen, headphone buttons) when the browser's
- * Media Session cannot reach them. The browser build does not install a native bridge.
- */
-export interface SystemMedia {
-  setTrack(track: { title: string; artist: string; album: string; artwork: string }): void;
-  setState(state: { playing: boolean; position: number; duration: number }): void;
-  onAction(handler: (action: "play" | "pause" | "next" | "previous" | "seek", position?: number) => void): void;
 }
 
 export interface MusikeApi {

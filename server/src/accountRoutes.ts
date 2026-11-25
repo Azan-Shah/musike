@@ -30,7 +30,7 @@ export async function registerAccounts(app: FastifyInstance, options: AccountOpt
     admin: req.musikeUser?.role === "admin", preferences: accounts && req.musikeUser ? await accounts.preferences(req.musikeUser.id) : undefined }));
   app.patch("/api/account/preferences", { schema: { body: {
     type: "object", minProperties: 1, additionalProperties: false,
-    properties: { normalization: { type: "string", enum: ["quiet", "standard", "loud"] }, theme: { type: "string", enum: ["dark", "light"] }, language: { type: "string", enum: ["en", "pt-BR"] }, appearance: { type: "object", additionalProperties: false, properties: { ...Object.fromEntries(["sidebarPlaylists", "compactSidebar", "albumColumn", "texture", "homeShortcuts", "homeRecent", "homeFavorites"].map(k => [k, { type: "boolean" }])), accent: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" } } } },
+    properties: { normalization: { type: "string", enum: ["quiet", "standard", "loud", "off"] }, theme: { type: "string", enum: ["dark", "light"] }, language: { type: "string", enum: ["en", "pt-BR"] }, appearance: { type: "object", additionalProperties: false, properties: { ...Object.fromEntries(["sidebarPlaylists", "compactSidebar", "albumColumn", "texture", "homeShortcuts", "homeRecent", "homeFavorites"].map(k => [k, { type: "boolean" }])), accent: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" } } } },
   } } }, async (req) => {
     if (!accounts || !req.musikeUser) throw fail(401, "Login required");
     return accounts.setPreferences(req.musikeUser.id, req.body);

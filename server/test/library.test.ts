@@ -32,7 +32,7 @@ test("one failed save is reported without poisoning future writes", async () => 
   await assert.rejects(lib.addFavorite(track(1)), /disk full/);
   await lib.addFavorite(track(2));
   assert.equal(attempts, 2);
-  assert.equal(JSON.parse(saved).favorites.length, 2);
+  assert.deepEqual(JSON.parse(saved).favorites.map((t: Track) => t.id), [track(2).id]);
 });
 
 test("failed initial read can be retried", async () => {
@@ -45,8 +45,8 @@ test("failed initial read can be retried", async () => {
 test("bulk playlist addition deduplicates existing and incoming tracks, preserving order", async () => {
   lib.useLibraryStorage({ read: async () => null, write: async () => {} });
   const p = await lib.createPlaylist("Mix", [track(1)]);
-  await lib.addToPlaylist(p.id, [track(1), track(2), track(2), track(3)]);
-  assert.deepEqual(p.tracks.map((t) => t.id), [1, 2, 3].map((n) => track(n).id));
+  const committed = await lib.addToPlaylist(p.id, [track(1), track(2), track(2), track(3)]);
+  assert.deepEqual(committed.tracks.map((t) => t.id), [1, 2, 3].map((n) => track(n).id));
 });
 
 test("merge matches newly appended playlists by case-insensitive name", async () => {
@@ -72,4 +72,13 @@ test("filtered pagination uses matching totals and preserves collection order", 
   assert.equal(filtered.total, 11);
   assert.equal(filtered.hasMore, true);
   await assert.rejects(lib.getTrackPage("playlist", "missing", 0, 10), /Playlist not found/);
+});
+
+test("version one replacement preserves large valid Favorites and rejects malformed shape", async () => {
+  const library = lib.createLibrary({ read: async () => null, write: async () => {} });
+  const favorites = Array.from({ length: 5001 }, (_, id) => track(id));
+  const result = await library.importLibrary({ playlists: [], history: [], favorites }, "replace");
+  assert.equal(result.favoritesAdded, favorites.length);
+  await assert.rejects(library.importLibrary({ favorites: null }, "replace"), /Musike backup/);
+  assert.equal((await library.getLibrary()).favorites.length, favorites.length);
 });

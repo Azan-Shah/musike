@@ -16,6 +16,13 @@ export interface SyncView {
 type Device = { id: string; session: string; instance?: string; name: string; seen: number; bucketAt: number; count: number; listeners: Set<(view: SyncView) => void> };
 type Room = { active: string | null; epoch: number; revision: number; updatedAt: number; snapshot: PlaybackSnapshot;
   devices: Map<string, Device>; commands: PlaybackCommand[]; transfer: string | null; transferAt: number; seq: number; savedAt: number; };
+/** The last accepted reference is reused for position-only snapshots. */
+const queueJson = new WeakMap<Track[], string>();
+function queueContents(queue: Track[]) {
+  let contents = queueJson.get(queue);
+  if (contents === undefined) { contents = JSON.stringify(queue); queueJson.set(queue, contents); }
+  return contents;
+}
 const empty = (): PlaybackSnapshot => ({ queue: [], original: null, index: 0, position: 0, duration: 0, status: "idle", shuffle: false, repeat: "off", autoRadio: true });
 const finite = (v: unknown, max: number) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max;
 function tracks(value: unknown): Track[] {
@@ -114,14 +121,20 @@ export class PlaybackSync {
       return this.view(room, id);
     });
   }
-  async read(user: string, session: string, id: string, touch = true) {
+  private installedDevice(user: string, session: string, id: string) {
     const room = this.rooms.get(user); const d = room?.devices.get(id);
     if (!room || !d || d.session !== session) throw fail(404, "Playback device not registered");
-    if (touch) d.seen = this.now(); return this.view(room, id);
+    return { room, device: d };
+  }
+  async read(user: string, session: string, id: string, touch = true) {
+    const { room, device } = this.installedDevice(user, session, id);
+    if (touch) device.seen = this.now();
+    return this.view(room, id);
   }
   async subscribe(user: string, session: string, id: string, send: (view: SyncView) => void) {
-    await this.read(user, session, id); const room = this.rooms.get(user)!; const device = room.devices.get(id)!;
+    const { room, device } = this.installedDevice(user, session, id);
     if (device.listeners.size >= 2) throw fail(429, "Too many playback connections");
+    device.seen = this.now();
     device.listeners.add(send); send(this.view(room, id)); return () => {
       device.listeners.delete(send);
       if (!device.listeners.size) {
@@ -166,7 +179,8 @@ export class PlaybackSync {
         if (room.active !== id || input.epoch !== room.epoch) throw fail(409, "Playback device no longer owns output");
         if (!Number.isSafeInteger(input.seq) || (input.seq as number) <= room.seq) throw fail(409, "Stale playback update");
         const snapshot = cleanSnapshot(input.release === true ? { ...room.snapshot, position: (input.snapshot as { position?: unknown })?.position, status: "paused" } : input.snapshot); room.seq = input.seq as number;
-        const queueChanged = JSON.stringify(snapshot.queue) !== JSON.stringify(room.snapshot.queue);
+        const queueChanged = queueContents(snapshot.queue) !== queueContents(room.snapshot.queue);
+        if (!queueChanged) snapshot.queue = room.snapshot.queue;
         const statusChanged = snapshot.status !== room.snapshot.status;
         room.snapshot = snapshot;
         if (input.ack && room.commands[0]?.id === input.ack) room.commands.shift();

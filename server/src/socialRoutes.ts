@@ -10,7 +10,8 @@ export function registerSocial(app: FastifyInstance, social: Social | null) {
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000) throw fail(400, "Invalid share offset");
     return offset;
   };
-  app.get("/api/social", req => social!.state(owner(req), offsetOf(req)));
+  app.get("/api/social", req => social!.state(owner(req), offsetOf(req), (req.query as { includeShares?: string }).includeShares !== "0"));
+  app.get("/api/social/presence", async req => ({ friends: await social!.friends(owner(req)) }));
   app.get("/api/social/shares", req => {
     const user = owner(req);
     const limit = Number((req.query as { limit?: string }).limit ?? 30);

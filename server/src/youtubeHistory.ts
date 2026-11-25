@@ -86,22 +86,28 @@ export class YouTubeHistory {
     let account = "";
     try { const client = await this.factory(value); account = (await client.account()).slice(0, 120); }
     catch { throw fail(400, "YouTube didn't accept these cookies. Copy them again from a signed-in browser"); }
-    await this.accounts.db.run("INSERT INTO youtube_history_connections(user_id,encrypted,account,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET encrypted=excluded.encrypted,account=excluded.account,updated_at=excluded.updated_at",
-      [user, this.accounts.box.seal(value, `youtube-history:${user}`), account, this.now()]);
-    this.links.delete(user); this.retryAt.delete(user); this.log({ event: "youtube_history.connected", user });
+    await this.accounts.lock(`youtube-history:${user}`, async () => {
+      await this.accounts.db.run("INSERT INTO youtube_history_connections(user_id,encrypted,account,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET encrypted=excluded.encrypted,account=excluded.account,updated_at=excluded.updated_at",
+        [user, this.accounts.box.seal(value, `youtube-history:${user}`), account, this.now()]);
+      this.forget(user);
+    });
+    this.log({ event: "youtube_history.connected", user });
     return { connected: true, account };
   }
 
   async disconnect(user: string) {
-    const play = this.plays.get(user); if (play) this.finish(user, play, play.lastPos);
-    this.links.delete(user); this.retryAt.delete(user); this.events.delete(user);
-    await this.accounts.db.run("DELETE FROM youtube_history_connections WHERE user_id=?", [user]);
+    await this.accounts.lock(`youtube-history:${user}`, async () => {
+      const removed = this.accounts.db.run("DELETE FROM youtube_history_connections WHERE user_id=?", [user]);
+      this.forget(user);
+      this.events.delete(user);
+      await removed;
+    });
   }
 
   /** Drops cached cookies and the current play without deleting the stored link (account suspended or revoked). */
   forget(user: string) {
     const play = this.plays.get(user); if (play) this.finish(user, play, play.lastPos);
-    this.links.delete(user); this.retryAt.delete(user);
+    this.loading.delete(user); this.links.delete(user); this.retryAt.delete(user);
   }
 
   private link(user: string): Promise<Link> {
@@ -109,12 +115,13 @@ export class YouTubeHistory {
     if (!pending) {
       pending = this.accounts.db.get("SELECT d.encrypted FROM youtube_history_connections d JOIN users u ON u.id=d.user_id WHERE d.user_id=? AND u.status='approved'", [user])
         .then((row) => {
+          if (this.closed || this.loading.get(user) !== pending) return null;
           const link: Link = row ? { client: this.factory(this.accounts.box.open(row.encrypted as string, `youtube-history:${user}`)), checkedAt: this.now() } : null;
           // Expired or rejected cookies: stop trying for a while instead of rebuilding a client on every snapshot.
           link?.client.catch(() => { this.log({ event: "youtube_history.client_failed", user }); if (this.links.get(user) === link) { this.links.set(user, null); this.retryAt.set(user, this.now() + 300_000); } });
           this.links.set(user, link); return link;
         })
-        .catch(() => null).finally(() => this.loading.delete(user));
+        .catch(() => null).finally(() => { if (this.loading.get(user) === pending) this.loading.delete(user); });
       this.loading.set(user, pending);
     }
     return pending;
@@ -126,7 +133,7 @@ export class YouTubeHistory {
     let cached = this.links.get(user);
     if (cached === null && (this.retryAt.get(user) ?? Infinity) <= this.now()) { this.retryAt.delete(user); this.links.delete(user); cached = undefined; }
     if (cached === null) return;
-    if (cached === undefined) { void this.link(user).then((link) => { if (link) this.observe(user, snapshot); }); return; }
+    if (cached === undefined) { void this.link(user).then((link) => { if (link && this.links.get(user) === link) this.observe(user, snapshot); }); return; }
     this.track(user, snapshot, cached);
   }
 
