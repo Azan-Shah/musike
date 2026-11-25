@@ -1,4 +1,5 @@
 import type { Track } from "./types";
+import { cleanArtist } from "./artistName";
 
 const noArgs = new Set(["toggle", "next", "prev", "clearUpcoming", "toggleShuffle", "cycleRepeat"]);
 function track(value: unknown): Track {
@@ -6,7 +7,7 @@ function track(value: unknown): Track {
   const t = value as Track;
   if (typeof t.id !== "string" || !/^[A-Za-z0-9_-]{11}$/.test(t.id) || typeof t.title !== "string" || typeof t.artist !== "string") throw new Error("Invalid playback track");
   const text = (v: unknown) => typeof v === "string" ? v.slice(0, 2048) : "";
-  return { id: t.id, title: text(t.title), artist: text(t.artist), album: text(t.album), duration: Number.isFinite(t.duration) ? Math.max(0, t.duration) : 0,
+  return { id: t.id, title: text(t.title), artist: cleanArtist(text(t.artist)), album: text(t.album), duration: Number.isFinite(t.duration) ? Math.max(0, t.duration) : 0,
     thumb: text(t.thumb), art: text(t.art), kind: t.kind === "video" ? "video" : "song" };
 }
 /** Construct a data-only wire payload. React events/DOM nodes never cross this boundary. */

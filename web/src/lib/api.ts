@@ -13,6 +13,7 @@ import {
   type SystemJob,
 } from "./apiTypes";
 import type { AlbumCard, AlbumPage, ArtistPage, Genre, GenreArtist, GenrePage, Library, Playlist, Track } from "./types";
+import { cleanArtist } from "./artistName";
 
 // Same-origin HTTP backend for the website and installed PWA.
 export * from "./apiTypes";
@@ -54,7 +55,8 @@ async function request<T>(path: string, init?: RequestInit & { json?: unknown })
     await res.body?.cancel(); recordPlayback("http.error", { traceId: trace, reason: failure, status: res.status });
     throw new ApiError(res.status, failureText(failure), undefined, failure, trace);
   }
-  const body = await res.json().catch(() => null);
+  // Strip " - Topic" from artist names everywhere, including tracks saved before the server cleaned them.
+  const body = await res.text().then((raw) => JSON.parse(raw, (key, value) => key === "artist" && typeof value === "string" ? cleanArtist(value) : value)).catch(() => null);
   rest.signal?.throwIfAborted();
   if (!body) throw new ApiError(res.status, failureText("unexpected_response"), undefined, "unexpected_response", trace);
   if (!res.ok) throw new ApiError(res.status, body.error ?? getT().player.httpError(res.status), body.code, failure ?? undefined, trace);

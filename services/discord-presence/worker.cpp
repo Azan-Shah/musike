@@ -65,11 +65,11 @@ int main() {
         // Member list shows "♫ <artist>" like Spotify instead of "Listening to Musike".
         presence.SetStatusDisplayType(discordpp::StatusDisplayTypes::State);
         presence.SetDetails(activity->at("title").get<std::string>());
-        // Pause and repeat show as a badge on the cover (small image), so the state line is just the artist.
+        // Pause and repeat-one are shown by the badge on the cover, so the state line is just the artist.
         presence.SetState(activity->at("artist").get<std::string>());
         std::string url = activity->value("url", "");
         if (!url.empty()) presence.SetDetailsUrl(url);
-        // Start + end = progress bar. The server sends a future start while paused so the bar stays still at 0:00.
+        // Start + end = progress bar. Paused cards send only a start (the moment of pausing), so Discord counts the pause time.
         int64_t start = activity->at("startedAt").get<int64_t>();
         int64_t end = activity->value("endsAt", static_cast<int64_t>(0));
         if (start > 0) {

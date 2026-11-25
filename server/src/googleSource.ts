@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Innertube } from "youtubei.js";
 import { toTrack, text } from "./search.js";
+import { cleanArtist } from "./artistName.js";
 
 export interface GoogleTokens { access_token: string; refresh_token: string; expires_at: number; }
 export interface SourceTrack { id: string; title: string; artist: string; album?: string; duration?: number; }
@@ -22,7 +23,7 @@ export const sourceTrack = (item: any): SourceTrack | null => {
     return { id: `unresolved-${createHash("sha256").update(`${title}\n${artist}`).digest("hex").slice(0, 24)}`, title, artist,
       duration: typeof item.duration === "number" ? item.duration : item.duration?.seconds ?? 0 };
   }
-  return { id: t.id, title: t.title, artist: t.artist || text(item.subtitle) || text(item.author), album: t.album,
+  return { id: t.id, title: t.title, artist: cleanArtist(t.artist || text(item.subtitle) || text(item.author)), album: t.album,
     duration: typeof item.duration === "number" ? item.duration : t.duration };
 };
 const track = sourceTrack;
@@ -89,7 +90,7 @@ export async function googleMusicSource(tokens: GoogleTokens, credentials: { cli
     return out.slice(0, limit);
   };
   const dataTrack = (item: any): SourceTrack => ({ id: item.contentDetails?.videoId ?? item.snippet?.resourceId?.videoId ?? item.id,
-    title: item.snippet?.title ?? "", artist: item.snippet?.videoOwnerChannelTitle ?? item.snippet?.channelTitle ?? "" });
+    title: item.snippet?.title ?? "", artist: cleanArtist(item.snippet?.videoOwnerChannelTitle ?? item.snippet?.channelTitle ?? "") });
   // Supplement each private Music collection independently. One successful filter must
   // not suppress recovery of a partially unreadable/failed playlist via the public API.
   try {

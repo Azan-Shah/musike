@@ -2,6 +2,7 @@ import { randomBytes, createHash } from "node:crypto";
 import type { Accounts } from "./accounts.js";
 import { fail } from "./accounts.js";
 import type { PlaybackSnapshot } from "./playbackSync.js";
+import { cleanArtist } from "./artistName.js";
 
 export interface DiscordOptions { pausedIcon?: string; repeatIcon?: string; clientId?: string; clientSecret?: string; redirectUri?: string; presenceUrl?: string; presenceKey?: string; transport?: typeof fetch; }
 interface Tokens { access_token: string; refresh_token: string; expires_at: number; }
@@ -11,8 +12,6 @@ type Activity = { title: string; artist: string; album: string; artwork: string;
 export const PAUSED_PRESENCE_MS = 5 * 60_000;
 /** The sidecar drops workers it hasn't heard from in 60 s, so unchanged cards are re-sent this often. */
 const REFRESH_MS = 30_000;
-/** How far ahead a paused card's start is placed so its bar stays still (longer than any pause it is shown for). */
-const FROZEN_AHEAD = 24 * 60 * 60;
 /** Small-image badge on the cover: an art asset key from the Discord Developer Portal, an https URL, or "off". */
 const icon = (value: string) => value !== "off" && (/^[a-z0-9_-]{1,64}$/.test(value) || /^https:\/\/\S{1,480}$/.test(value)) ? value : "";
 /** Default badges ship in web/public/presence and are loaded from GitHub, which Discord can always reach. */
@@ -96,14 +95,17 @@ export class DiscordService {
       const known = [snapshot.duration, track.duration].find((value) => Number.isFinite(value) && value > 0);
       const duration = known ? Math.round(known) : 0;
       // Playing: start and end together make Discord draw a Spotify-style progress bar.
-      // Paused: Discord has no paused state and can't pin the bar mid-song, so the start is set in the future,
-      // which shows a still bar at 0:00 with the song length (the same trick other music presence apps use).
-      const startedAt = playing ? Math.floor(Date.now() / 1000 - snapshot.position) : Math.floor(Date.now() / 1000) + FROZEN_AHEAD;
+      // Paused: start only (no end), set to the moment of pausing, so Discord shows a timer counting how long
+      // the song has been paused. Kept across refreshes and repeated paused snapshots of the same song.
+      const previous = this.latest.get(user)?.activity;
+      const url = `https://music.youtube.com/watch?v=${track.id}`;
+      const startedAt = playing ? Math.floor(Date.now() / 1000 - snapshot.position)
+        : previous?.playback === "paused" && previous.url === url ? previous.startedAt : Math.floor(Date.now() / 1000);
       const repeat = snapshot.repeat;
       const smallImage = !playing ? this.pausedIcon : repeat === "one" ? this.repeatIcon : "";
       const smallText = !playing ? "Paused" : repeat === "one" ? "On repeat" : repeat === "all" ? "Repeating queue" : "";
-      activity = { title: track.title, artist: track.artist, album: track.album ?? "", artwork: track.art || track.thumb,
-        url: `https://music.youtube.com/watch?v=${track.id}`, startedAt, endsAt: duration ? startedAt + duration : 0,
+      activity = { title: track.title, artist: cleanArtist(track.artist), album: track.album ?? "", artwork: track.art || track.thumb,
+        url, startedAt, endsAt: playing && duration ? startedAt + duration : 0,
         playback: playing ? "playing" : "paused", repeat, smallImage, smallText };
     }
     let state = this.latest.get(user);

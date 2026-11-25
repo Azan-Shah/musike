@@ -60,8 +60,11 @@ test("Discord receives confirmed playback, shows pause and repeat, stopping clea
     const last = () => JSON.parse(String(f.calls.filter((call) => call.url.endsWith("/presence")).at(-1)!.init!.body)).activity;
     assert.equal(body.activity.playback, "playing"); assert.equal(body.activity.smallText, "");
     f.discord.update(f.user, { ...snapshot, status: "paused" }); await new Promise((r) => setTimeout(r, 1100));
-    assert.deepEqual([last().playback, last().endsAt - last().startedAt, last().smallText, last().title], ["paused", 180, "Paused", "Fixture title"]);
-    assert.ok(last().startedAt > Date.now() / 1000 + 3600, "paused bar is frozen by a future start");
+    assert.deepEqual([last().playback, last().endsAt, last().smallText, last().title], ["paused", 0, "Paused", "Fixture title"]);
+    const pausedAt = last().startedAt; assert.ok(Math.abs(Date.now() / 1000 - pausedAt) < 3, "paused timer counts from the moment of pausing");
+    await new Promise((r) => setTimeout(r, 1000));
+    f.discord.update(f.user, { ...snapshot, status: "paused" }); await new Promise((r) => setTimeout(r, 1100));
+    assert.equal(last().startedAt, pausedAt, "a later paused snapshot keeps the pause start");
     assert.match(last().smallImage, /^https:\/\/raw\.githubusercontent\.com\/.+\/paused\.png$/);
     f.discord.update(f.user, { ...snapshot, repeat: "one" }); await new Promise((r) => setTimeout(r, 1100));
     assert.deepEqual([last().playback, last().repeat, last().smallText, last().endsAt - last().startedAt], ["playing", "one", "On repeat", 180]);

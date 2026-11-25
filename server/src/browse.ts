@@ -4,6 +4,7 @@ import { isLang, msg, type Lang } from "./i18n.js";
 import { sized, text, toTrack, withClient } from "./search.js";
 import type { Track } from "./types.js";
 import { HttpError, VIDEO_ID } from "./types.js";
+import { cleanArtist } from "./artistName.js";
 
 export interface Genre {
   /** YouTube Music's opaque "params" for the genre page. */
@@ -283,7 +284,7 @@ function albumCard(item: any): AlbumCard | null {
   return {
     id,
     title: text(item.title),
-    artist: artists.join(", ") || text(item.author?.name),
+    artist: cleanArtist(artists.join(", ") || text(item.author?.name)),
     year: String(item.year ?? subtitle.match(/\b(19|20)\d\d\b/)?.[0] ?? ""),
     ...imagesOf(item),
   };
@@ -357,7 +358,7 @@ const albumPage = cached(60 * MINUTE, async (key): Promise<AlbumPage> => {
       (i: any): Track => ({
         id: i.id,
         title: text(i.title) || "Untitled",
-        artist: (i.artists ?? []).map((a: { name?: string }) => text(a?.name)).filter(Boolean).join(", ") || artist,
+        artist: cleanArtist((i.artists ?? []).map((a: { name?: string }) => text(a?.name)).filter(Boolean).join(", ") || artist),
         album: title,
         duration: i.duration?.seconds ?? 0,
         thumb: sized(cover.art, 120),

@@ -6,6 +6,7 @@ import { msg, youtubeLang, type Lang } from "./i18n.js";
 import type { Track } from "./types.js";
 import { HttpError, VIDEO_ID } from "./types.js";
 import { ytdlpSearch } from "./ytdlp.js";
+import { cleanArtist } from "./artistName.js";
 
 // One session per language: YouTube Music words its own texts (genre names, artist bios) in the session's language.
 const clients = new Map<string, Promise<Innertube>>();
@@ -135,7 +136,7 @@ export async function search(query: string, type: "song" | "video", lang?: Lang)
     .map((e) => ({
       id: e.id,
       title: e.title,
-      artist: e.channel ?? e.uploader ?? "",
+      artist: cleanArtist(e.channel ?? e.uploader ?? ""),
       duration: e.duration ?? 0,
       ...videoThumbs(e.id),
       kind: "video" as const,
@@ -177,7 +178,7 @@ function isArtistChannel(channel: string, artist: string): boolean {
   if (!want) return false;
   return channel.split(",").some((c) => {
     const have = compact(c);
-    return have === want || [want + "vevo", want + "oficial", want + "official", want + "tv", want + "music"].includes(have);
+    return have === want || [want + "vevo", want + "oficial", want + "official", want + "tv", want + "music", want + "topic"].includes(have);
   });
 }
 
