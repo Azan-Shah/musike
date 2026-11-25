@@ -91,6 +91,15 @@ const preferenceSchema = `
 CREATE TABLE account_preferences(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  normalization TEXT NOT NULL DEFAULT 'standard' CHECK(normalization IN ('quiet','standard','loud')), revision INTEGER NOT NULL DEFAULT 0);
 INSERT INTO migrations(key,value) VALUES('audio-normalization-v1','1');`;
+const normalizationOffSchema = `
+CREATE TABLE account_preferences_next(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  normalization TEXT NOT NULL DEFAULT 'standard' CHECK(normalization IN ('quiet','standard','loud','off')),
+  revision INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}');
+INSERT INTO account_preferences_next(user_id,normalization,revision,json)
+  SELECT user_id,normalization,revision,json FROM account_preferences;
+DROP TABLE account_preferences;
+ALTER TABLE account_preferences_next RENAME TO account_preferences;
+INSERT INTO migrations(key,value) VALUES('audio-normalization-off-v1','1');`;
 const performanceSchema = `
 CREATE INDEX otps_cleanup_time ON otps(created_at);
 CREATE INDEX oauth_states_expiry ON oauth_states(expires_at);
@@ -136,6 +145,14 @@ export class Database {
         db.exec('BEGIN IMMEDIATE');
         try{db.exec(workerData.performanceSchema);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
       }
+      if(!db.prepare("SELECT key FROM migrations WHERE key='audio-normalization-off-v1'").get()){
+        if(existing){
+          const target=workerData.file+'.before-audio-normalization-off-'+require('node:crypto').randomUUID()+'.sqlite';
+          db.prepare('VACUUM INTO ?').run(target);fs.chmodSync(target,0o600);
+        }
+        db.exec('BEGIN IMMEDIATE');
+        try{db.exec(workerData.normalizationOffSchema);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+      }
       const prepared = new Map();
       const execute = ({sql, params = [], mode = 'run'}) => {
         let statement = prepared.get(sql);
@@ -156,7 +173,7 @@ export class Database {
         else result=execute(statements[0]);parentPort.postMessage({id,result});
       }catch(e){parentPort.postMessage({id,error:'Database operation failed',detail:e.message});}});
       parentPort.postMessage({id:0,result:true});`;
-    this.worker = new Worker(source, { eval: true, workerData: { file, schema, featureSchema, socialSchema, preferenceSchema, performanceSchema } });
+    this.worker = new Worker(source, { eval: true, workerData: { file, schema, featureSchema, socialSchema, preferenceSchema, performanceSchema, normalizationOffSchema } });
     this.worker.on("message", ({ id, result, error, detail }) => {
       const job = this.pending.get(id); if (!job) return; this.pending.delete(id);
       if (error) job.reject(new Error(error, { cause: detail })); else job.resolve(result);

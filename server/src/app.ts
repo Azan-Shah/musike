@@ -49,7 +49,7 @@ function query(q: unknown): string {
 export interface StartOptions {
   port?: number;
   host?: string;
-  /** Try the next ports when the preferred one is taken (the desktop app does this). */
+  /** Try the next ports when the preferred one is taken. */
   portFallback?: boolean;
 }
 
@@ -109,7 +109,7 @@ export async function createApp(options: AccountOptions & { trustProxy?: string;
       if (accounts) void accounts.audit(req.musikeUser?.id ?? null, "request.error", req.routeOptions.url ?? null, req.realClientIp, "error").catch(() => {});
     }
     // Musike's own errors are translated into the language the app asked for.
-    const error = accounts && status >= 500 && !(e instanceof HttpError) ? "Request failed" : e instanceof HttpError ? tr(langOf(req), e.text) : e.message;
+    const error = status >= 500 && !(e instanceof HttpError) ? "Request failed" : e instanceof HttpError ? tr(langOf(req), e.text) : e.message;
     if (req.routeOptions.url?.startsWith("/api/stream/") && /^[-\w]{11}$/.test((req.params as { id?: string })?.id ?? "")) {
       for (const [key, value] of streamFailures) if (Date.now() - value.at >= 60_000) streamFailures.delete(key);
       if (streamFailures.size >= 200) streamFailures.delete(streamFailures.keys().next().value!);
@@ -280,6 +280,10 @@ export async function createApp(options: AccountOptions & { trustProxy?: string;
     reply.raw.once("close", release); reply.raw.once("finish", release);
     const cached = await audioCache.find(id);
     if (cached) {
+      if (cached.loudness && !req.headers.range) {
+        const { version, integratedLufs, truePeakDbtp } = cached.loudness;
+        reply.header("x-musike-loudness", `${version},${integratedLufs},${truePeakDbtp}`);
+      }
       return serveFile(req, reply, cached.file, cached.mime);
     }
     release();

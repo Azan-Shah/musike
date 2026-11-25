@@ -1,37 +1,64 @@
-export type Normalization = "quiet" | "standard" | "loud";
-export const normalizationOf = (value: unknown): Normalization => value === "quiet" || value === "loud" ? value : "standard";
-const targets = { quiet: -23, standard: -18, loud: -14 };
+export type Normalization = "quiet" | "standard" | "loud" | "off";
+export const normalizationOf = (value: unknown): Normalization =>
+  value === "quiet" || value === "loud" || value === "off" ? value : "standard";
+export interface LoudnessMeasurement { version: 1; integratedLufs: number; truePeakDbtp: number; }
 
-/** Streaming RMS level matching, silence gate and linked-channel peak protection.
- * Targets are dBFS RMS, not a claim of Spotify/EBU integrated-LUFS equivalence.
- * Runs on the audio rendering thread, independently of page animation/timer throttling.
- */
-export class NormalizationCore {
-  private energy = 0;
+const targets = { quiet: -23, standard: -18, loud: -14 };
+const fallback = { quiet: -9, standard: -6, loud: -3 };
+
+export function isLoudness(value: unknown): value is LoudnessMeasurement {
+  const m = value as LoudnessMeasurement | null;
+  return m?.version === 1 && Number.isFinite(m.integratedLufs) && m.integratedLufs >= -70 && m.integratedLufs <= 5 &&
+    Number.isFinite(m.truePeakDbtp) && m.truePeakDbtp >= -100 && m.truePeakDbtp <= 20;
+}
+
+export function trackGainDb(mode: Normalization, measurement?: LoudnessMeasurement) {
+  if (mode === "off") return 0;
+  if (!isLoudness(measurement)) return fallback[mode];
+  return Math.min(targets[mode] - measurement.integratedLufs, -1 - measurement.truePeakDbtp, 12);
+}
+
+const measurements = new WeakMap<Blob, LoudnessMeasurement>();
+
+/** Attach metadata only to the complete body that carried it. */
+export function rememberLoudness(blob: Blob, measurement: unknown) {
+  if (isLoudness(measurement)) measurements.set(blob, measurement);
+  return blob;
+}
+
+export const loudnessOf = (blob: Blob) => measurements.get(blob);
+
+export function rememberResponseLoudness(blob: Blob, response: Response) {
+  const header = response.status === 200 && response.headers.get("x-musike-loudness");
+  if (!header || !/^1,-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$/.test(header)) return blob;
+  const [, lufs, peak] = header.split(",");
+  return rememberLoudness(blob, { version: 1, integratedLufs: Number(lufs), truePeakDbtp: Number(peak) });
+}
+
+const ceiling = 10 ** (-1 / 20);
+
+/** The safety stage only acts on excessive peaks in an unmeasured rendition. */
+export class PeakLimiter {
   private gain = 1;
-  private limiter = 1;
-  constructor(private rate: number, private mode: Normalization = "standard") {}
-  setMode(mode: Normalization) { this.mode = normalizationOf(mode); }
-  reset() { this.energy = 0; this.gain = 1; this.limiter = 1; }
-  process(input: Float32Array[], output: Float32Array[]) {
+  private release: number;
+  constructor(rate: number) { this.release = Math.exp(-1 / (rate * .06)); }
+
+  process(input: Float32Array[], output: Float32Array[], enabled: boolean) {
     const samples = output[0]?.length ?? 0;
-    const meter = Math.exp(-1 / (this.rate * .4));
-    const release = Math.exp(-1 / (this.rate * .15));
+    if (!enabled) this.gain = 1;
     for (let i = 0; i < samples; i++) {
-      let energy = 0; let peak = 0;
-      for (const channel of input) { const x = Number.isFinite(channel[i]) ? channel[i]! : 0; energy += x * x; peak = Math.max(peak, Math.abs(x)); }
-      energy /= Math.max(1, input.length);
-      this.energy = meter * this.energy + (1 - meter) * energy;
-      // Do not lift silence/noise floors, and limit amplification to +12 dB.
-      const desired = this.energy > 1e-6 ? Math.min(4, Math.max(.063, 10 ** (targets[this.mode] / 20) / Math.sqrt(this.energy))) : Math.min(1, this.gain);
-      const smoothing = Math.exp(-1 / (this.rate * (desired < this.gain ? .025 : 1.5)));
-      this.gain = smoothing * this.gain + (1 - smoothing) * desired;
-      const ceiling = 10 ** (-1 / 20);
-      const protect = peak * this.gain > ceiling ? ceiling / (peak * this.gain) : 1;
-      this.limiter = protect < this.limiter ? protect : release * this.limiter + (1 - release) * protect;
-      for (let c = 0; c < output.length; c++) {
-        const x = input[c]?.[i] ?? input[0]?.[i] ?? 0;
-        output[c]![i] = Number.isFinite(x) ? x * this.gain * this.limiter : 0;
+      if (enabled) {
+        let peak = 0;
+        for (const channel of input) {
+          const value = channel[i]!;
+          if (Number.isFinite(value)) peak = Math.max(peak, Math.abs(value));
+        }
+        const allowed = peak > ceiling ? ceiling / peak : 1;
+        this.gain = allowed < this.gain ? allowed : this.release * this.gain + (1 - this.release) * allowed;
+      }
+      for (let channel = 0; channel < output.length; channel++) {
+        const value = input[channel]?.[i] ?? input[0]?.[i] ?? 0;
+        output[channel]![i] = Number.isFinite(value) ? value * this.gain : 0;
       }
     }
   }

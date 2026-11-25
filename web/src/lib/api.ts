@@ -11,7 +11,6 @@ import {
   type Prepared,
   type SystemInfo,
   type SystemJob,
-  type SystemMedia,
 } from "./apiTypes";
 import type { AlbumCard, AlbumPage, ArtistPage, Genre, GenreArtist, GenrePage, Library, Playlist, Track } from "./types";
 
@@ -127,7 +126,7 @@ export const api: MusikeApi = {
 };
 
 /** What a media element plays for a track: the server's same-origin stream proxy. */
-export const streamSource = (id: string, kind: "audio" | "video", quality: "sd" | "hd", trace = playbackTrace()): string | Promise<string> =>
+export const streamSource = (id: string, kind: "audio" | "video", quality: "sd" | "hd", trace = playbackTrace()): string =>
   kind === "audio" ? `/api/stream/${id}/audio?trace=${encodeURIComponent(trace)}` : `/api/stream/${id}/video?q=${quality}&trace=${encodeURIComponent(trace)}`;
 
 /** Saves a text file the way this platform does it: a browser download. */
@@ -140,11 +139,8 @@ export async function saveFile(name: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** Browser media controls use the Media Session API. */
-export const systemMedia: SystemMedia | null = null;
-
 /** Supported web/PWA capabilities. */
-export const capabilities = { video: true, engineSettings: true, retryOnError: false };
+export const capabilities = { video: true, engineSettings: true };
 
 /** Media elements hide the HTTP error body; fetch it to show the real reason. */
 export async function explainStreamError(url: string, mediaCode?: number): Promise<{ message: string; code?: ErrorCode; failure?: FailureKind }> {

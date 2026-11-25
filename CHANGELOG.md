@@ -1,3 +1,12 @@
+# 25 November 2026 — fixed track volume and release reliability
+
+- Replace streaming RMS gain changes with fixed per-rendition loudness gain, peak-limited boost and source-bound start fades. Add the account-synced Off setting, with an additive backed-up migration.
+- Persist Library edits before making them visible, preserve large valid version 1 backups, report skipped input and release idle snapshots. Reuse committed summaries and membership lookups.
+- Admit playback SSE before HTTP headers, reuse accepted queue comparisons, and narrow Social polling and offline progress work. Keep auth-off support and existing playback/output contracts.
+- Correct the BUG-035 YouTube History test and fence late link lookups after credential or account changes. Package a Git bundle and the Hermes push/staging/rollback procedure.
+
+---
+
 # Performance release with compiled server and PWA — 24 November 2026
 
 - Start Library from an account-scoped index. Load a complete playlist or Favorites on demand and retain queue order after paging.

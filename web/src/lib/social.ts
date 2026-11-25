@@ -9,7 +9,10 @@ export interface SocialState {
   shares: { id: string; name: string; owner: { id: string; name: string }; permission: string; tracks: number }[];
 }
 export interface SharedPlaylistView { id: string; owner: { id: string; name: string }; permission: string; playlist: Playlist }
-export const socialState = (offset = 0) => accountRequest<SocialState>(`/api/social?offset=${offset}`);
+export const socialOverview = (signal: AbortSignal) =>
+  accountRequest<SocialState>("/api/social?includeShares=0", undefined, undefined, signal);
+export const socialPresence = (signal: AbortSignal) =>
+  accountRequest<Pick<SocialState, "friends">>("/api/social/presence", undefined, undefined, signal);
 export const sharedPlaylist = (id: string) => accountRequest<SharedPlaylistView>(`/api/shared-playlists/${encodeURIComponent(id)}`);
 
 export const incomingShares = (offset: number, limit: number, signal: AbortSignal) =>

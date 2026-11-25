@@ -7,6 +7,8 @@ import { Accounts } from "../src/accounts.js";
 import { PlaybackSync, type PlaybackSnapshot } from "../src/playbackSync.js";
 import { config } from "../src/config.js";
 import { createApp } from "../src/app.js";
+import Fastify from "fastify";
+import { registerPlayback } from "../src/playbackRoutes.js";
 
 const track = { id: "testtrack01", title: "Fixture", artist: "Fixture", duration: 180, thumb: "", art: "", kind: "song" as const };
 const snapshot = (position = 0): PlaybackSnapshot => ({ queue: [track], original: null, index: 0, position, duration: 180, status: "playing", shuffle: false, repeat: "off", autoRadio: false });
@@ -65,4 +67,28 @@ test("sync routes remain behind the account wall and legacy auth-off behavior re
     assert.equal((await app.inject({ url: "/api/playback/state?deviceId=private" })).statusCode, 401);
     assert.equal((await app.inject({ method: "POST", url: "/api/playback/devices", payload: { clientId: "client-aaa" } })).statusCode, 403);
   } finally { await app.close(); config.dataDir = old; await rm(dir, { recursive: true, force: true }); }
+});
+
+test("playback SSE admission returns an HTTP error before sending stream headers", async () => {
+  const f = await fixture();
+  const app = Fastify();
+  const session = "fixture-session";
+  app.addHook("onRequest", async req => {
+    req.musikeUser = { id: f.user } as NonNullable<typeof req.musikeUser>;
+    req.musikeSession = session;
+  });
+  const sync = registerPlayback(app, f.a)!;
+  const view = await sync.register(f.user, session, "fixture-browser", "Browser");
+  const first = await sync.subscribe(f.user, session, view.deviceId, () => {});
+  const second = await sync.subscribe(f.user, session, view.deviceId, () => {});
+  try {
+    const response = await app.inject({ url: `/api/playback/updates?deviceId=${view.deviceId}` });
+    assert.equal(response.statusCode, 429);
+    assert.match(response.headers["content-type"] ?? "", /^application\/json/);
+  } finally {
+    first();
+    second();
+    await app.close();
+    await f.cleanup();
+  }
 });

@@ -1,13 +1,13 @@
 import { mediaMetadata, mediaPlaybackState, registerMediaActions } from "../lib/mediaSession";
-import { cacheRecentAudio, offlineAudioBlob, offlineAudioUrl, retainPreloadedAudio, touchDownloadedAudio } from "../lib/offlineDownloads";
+import { cacheRecentAudio, offlineAudioBlob, retainPreloadedAudio, touchDownloadedAudio } from "../lib/offlineDownloads";
 import { useSession } from "../stores/session";
 import { PlaybackWindow } from "../lib/playbackWindow";
 import { nextDownloaded } from "../lib/playbackFallback";
 import { AudioNormalization } from "../lib/audioNormalization";
-import { normalizationOf } from "../lib/audioNormalizationCore";
+import { loudnessOf, normalizationOf } from "../lib/audioNormalizationCore";
 import { create } from "zustand";
 import { getT, useT } from "../i18n";
-import { api, capabilities, explainStreamError, saveFile, streamSource, systemMedia, type ApiError, type ErrorCode } from "../lib/api";
+import { api, capabilities, explainStreamError, saveFile, streamSource, type ApiError, type ErrorCode } from "../lib/api";
 import { beginPlaybackTrace, recordPlayback, playbackEvents, flushPlaybackEvents, type FailureKind } from "../lib/playbackDiagnostics";
 import { recoverableFailure, requestRadio } from "../lib/playbackRecovery";
 import { createAudio } from "../lib/audio";
@@ -181,8 +181,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
   function play(media: HTMLMediaElement, fallback?: () => void) {
     const mine = token;
-    void normalization.start(media);
-    media.play().catch((err: DOMException) => {
+    const current = () => mine === token && !sessionLost && playbackCanOutput() && activeMedia() === media;
+    normalization.start(media, current);
+    media.play().then(() => { if (current() && !media.paused) normalization.playing(media); }).catch((err: DOMException) => {
       if (mine !== token || err.name === "AbortError") return; // src changed mid-start
       if (err.name === "NotAllowedError") { if (fallback) fallback(); else { resumeWanted = false; set({ status: "paused" }); } } // autoplay blocked
     });
@@ -218,7 +219,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
         duration: track.duration,
         buffered: 0,
       });
-      activeMedia()?.pause();
+      const previous = activeMedia();
+      if (previous) { normalization.cancel(previous); previous.pause(); }
       setMetadata(track);
       void lookupClip(track).then(() => mine === token && load(index, opts));
       return;
@@ -227,6 +229,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     const kind = opts.body ? "audio" : kindFor(track);
     const media = mediaFor(kind);
     const other = mediaFor(kind === "video" ? "audio" : "video");
+    normalization.cancel(other);
     other.pause();
     if (other.getAttribute("src")) {
       other.removeAttribute("src");
@@ -249,37 +252,40 @@ export const usePlayer = create<PlayerState>((set, get) => {
       buffered: 0,
     });
     normalization.setVolume(media, s.volume, s.muted);
-    normalization.reset(media);
     media.loop = s.repeat === "one";
-    const start = (src: string) => {
+    const start = (src: string, body?: Blob) => {
+      normalization.arm(media, body ? loudnessOf(body) : undefined);
       media.src = src;
       if (autoplay) play(media);
     };
     // The same-origin proxy URL is synchronous; resolution stays on the server.
     if (activeBlob) { URL.revokeObjectURL(activeBlob); activeBlob = null; }
     if (opts.body && kind === "audio") {
-      activeBlob = URL.createObjectURL(opts.body); start(activeBlob);
+      activeBlob = URL.createObjectURL(opts.body); start(activeBlob, opts.body);
       recordPlayback("player.downloaded_fallback", { videoId: track.id }); setMetadata(track); return;
     }
     if (complete && kind === "audio") {
-      activeBlob = complete.url; start(complete.url);
+      activeBlob = complete.url; start(complete.url, complete.blob);
       recordPlayback("player.complete_handoff", { videoId: track.id, traceId: complete.trace });
       setMetadata(track); return;
     }
     const mine = token;
     const network = () => {
       if (offline) { resumeWanted = false; set({ status: "paused", statusText: { error: getT().offline.unavailable } }); return; }
-      const source = streamSource(mediaIdFor(track, kind), kind, s.quality);
-      if (typeof source === "string") start(source);
-      else source.then(src => mine === token && start(src), (err: ApiError) => mine === token && report(err.message, err.code));
+      start(streamSource(mediaIdFor(track, kind), kind, s.quality));
     };
     // Locked transitions keep a synchronous source/play path. Persistent next-track bytes
     // are loaded by warmQueue while the current track is still playing.
     if (kind === "audio" && sessionStorage.getItem("musike:user") && (offline || navigator.userActivation?.isActive)) {
-      void offlineAudioUrl(track.id).then(url => {
-        if (mine !== token) { if (url) URL.revokeObjectURL(url); return; }
-        if (url) { activeBlob = url; start(url); void touchDownloadedAudio(track.id); }
-        else network();
+      normalization.cancel(media);
+      media.pause();
+      void offlineAudioBlob(track.id).then(body => {
+        if (mine !== token || !playbackCanOutput()) return;
+        if (body) {
+          activeBlob = URL.createObjectURL(body);
+          start(activeBlob, body);
+          void touchDownloadedAudio(track.id);
+        } else network();
       });
     } else network();
     setMetadata(track);
@@ -349,7 +355,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
         // the entire foreground window; the cold audio route already races sources.
         for (const track of window) {
           const source = streamSource(track.id, "audio", s.quality, trace);
-          if (typeof source === "string") completePreload.prepare(track.id, source, trace);
+          completePreload.prepare(track.id, source, trace);
         }
       }
     }
@@ -363,7 +369,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       if (lookahead > 0 && next && !s.preferVideo && result?.readyIds?.includes(next.id)) {
         const trace = crypto.randomUUID();
         const source = streamSource(next.id, "audio", s.quality, trace);
-        if (typeof source === "string") void completePreload.prepare(next.id, source, trace);
+        void completePreload.prepare(next.id, source, trace);
         warmRetries = 0;
       } else if (lookahead > 0 && next && !s.preferVideo && warmRetries++ < 10 && !warmTimer) {
         warmTimer = setTimeout(() => { warmTimer = null; warmQueue(); }, 1500);
@@ -433,8 +439,6 @@ export const usePlayer = create<PlayerState>((set, get) => {
     }
   }
 
-  // A stream URL that expired mid-song gets one fresh try from the same spot before giving up.
-  let retriedToken = -1;
   let probingToken = -1;
 
   async function downloadedFallback(mine: number) {
@@ -463,12 +467,6 @@ export const usePlayer = create<PlayerState>((set, get) => {
     if (probingToken === mine) return;
     const url = media.currentSrc || media.src;
     recordPlayback(stalled ? "media.stalled" : "media.error", mediaFields(media));
-    if (capabilities.retryOnError && retriedToken !== mine) {
-      const at = media.currentTime || get().position;
-      load(get().index, { startAt: at, autoplay: true });
-      retriedToken = token;
-      return;
-    }
     probingToken = mine;
     set({ status: "loading", statusText: null });
     explainStreamError(url, media.error?.code).then(({ message, code, failure }) => {
@@ -512,6 +510,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     });
     media.addEventListener("playing", () => {
       if (!isActive() || media.paused) return;
+      normalization.playing(media);
       loadingAt = Date.now(); set({ status: "playing", statusText: null });
       onStarted();
       syncPlaybackState();
@@ -527,7 +526,6 @@ export const usePlayer = create<PlayerState>((set, get) => {
     media.addEventListener("timeupdate", () => {
       if (!isActive() || pendingSeek > 0) return;
       if (Math.abs(media.currentTime - get().position) >= 0.2) { loadingAt = Date.now(); set({ position: media.currentTime }); }
-      syncSystemMedia(); // throttled on the other side
     });
     media.addEventListener("progress", () => {
       if (!isActive() || !media.buffered.length) return;
@@ -756,7 +754,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
       cancelRetry(); resumeWanted = false; unlockPending = false; token++; loaded = null; pendingSeek = 0;
       radioJob?.controller.abort(); manualRadio?.abort();
       if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; }
-      for (const media of [audio, videoEl]) { media.pause(); media.removeAttribute("src"); media.load(); }
+      for (const media of [audio, videoEl]) {
+        normalization.cancel(media);
+        media.pause(); media.removeAttribute("src"); media.load();
+      }
       set({ status: get().queue.length ? "paused" : "idle", statusText: null, buffered: 0 });
       syncPlaybackState();
     },
@@ -789,9 +790,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
       cancelRetry();
       completePreload.clear(); if (activeBlob) { URL.revokeObjectURL(activeBlob); activeBlob = null; }
       radioJob?.controller.abort(); manualRadio?.abort(); if (warmTimer) clearTimeout(warmTimer); token++; loaded = null; resumeWanted = false;
-      for (const media of [audio, videoEl]) { media.pause(); media.removeAttribute("src"); media.load(); }
+      for (const media of [audio, videoEl]) {
+        normalization.cancel(media);
+        media.pause(); media.removeAttribute("src"); media.load();
+      }
       set({ queue: [], original: null, index: 0, status: "idle", statusText: null, position: 0, duration: 0, buffered: 0 });
-      systemMedia?.setState({ playing: false, position: 0, duration: 0 });
       if ("mediaSession" in navigator) { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = "none"; }
     },
   };
@@ -799,8 +802,15 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
 normalization.setVolume(audio, usePlayer.getState().volume, usePlayer.getState().muted);
 normalization.setVolume(videoEl, usePlayer.getState().volume, usePlayer.getState().muted);
-normalization.setMode(normalizationOf(useSession.getState().preferences?.normalization ?? (!useSession.getState().enabled ? localStorage.getItem("musike:normalization") : undefined)));
-useSession.subscribe?.((state) => normalization.setMode(normalizationOf(state.preferences?.normalization)));
+function normalizationPreference(state: ReturnType<typeof useSession.getState>) {
+  if (state.preferences?.normalization) return state.preferences.normalization;
+  if (!state.enabled) {
+    try { return normalizationOf(localStorage.getItem("musike:normalization")); } catch {}
+  }
+  return "standard";
+}
+normalization.setMode(normalizationPreference(useSession.getState()));
+useSession.subscribe?.(state => normalization.setMode(normalizationPreference(state)));
 
 export const selectCurrent = (s: PlayerState): Track | null => s.queue[s.index] ?? null;
 
@@ -840,7 +850,10 @@ function restorePlayback() {
   recordPlayback("page.resume"); void flushPlaybackEvents();
   const state = usePlayer.getState(); state.warmUpcoming();
   if (resumeWanted && document.visibilityState !== "hidden") { unlockPending = true;
-    if (playbackCanOutput() && state.status === "playing") void normalization.start(state.mediaKind === "video" ? videoEl : audio);
+    if (playbackCanOutput() && state.status === "playing") {
+      const generation = token;
+      normalization.start(mediaFor(state.mediaKind), () => generation === token && playbackCanOutput() && !sessionLost);
+    }
   }
   if (resumeWanted && (state.status === "error" || recoveryPaused) && recoverableFailure(lastFailure) && !unlockRecoveryUsed && document.visibilityState !== "hidden") {
     unlockRecoveryUsed = true; unlockPending = false; recoveryCount = 0; recordPlayback("player.unlock_recovery"); if (recoveryPaused) { recoveryPaused = false; usePlayer.setState({ status: "error" }); }
@@ -849,8 +862,11 @@ function restorePlayback() {
 }
 document.addEventListener("visibilitychange", () => {
   recordPlayback(document.visibilityState === "hidden" ? "page.hidden" : "page.visible");
-  if (document.visibilityState === "hidden") { persist(); usePlayer.getState().warmUpcoming(); void flushPlaybackEvents(); }
-  else restorePlayback();
+  if (document.visibilityState === "hidden") {
+    normalization.finishDirectFade(audio);
+    normalization.finishDirectFade(videoEl);
+    persist(); usePlayer.getState().warmUpcoming(); void flushPlaybackEvents();
+  } else restorePlayback();
 });
 addEventListener("online", restorePlayback);
 addEventListener("pageshow", restorePlayback);
@@ -865,21 +881,11 @@ setInterval(() => {
 // Media Session: lock-screen, headset and notification controls.
 
 function setMetadata(track: Track) {
-  systemMedia?.setTrack({ title: track.title, artist: track.artist, album: track.album ?? "", artwork: track.art || track.thumb });
   if (!("mediaSession" in navigator)) return;
   try { navigator.mediaSession.metadata = new MediaMetadata(mediaMetadata(track)); } catch { /* Browser may reject remote artwork. Audio remains usable. */ }
 }
 
-/** The phone's notification and lock screen. A track that is loading is about to play, so it counts as playing:
- *  reporting a pause between tracks would let Android stop the app in the background. */
-function syncSystemMedia() {
-  if (!systemMedia) return;
-  const { status, position, duration } = usePlayer.getState();
-  systemMedia.setState({ playing: status === "playing" || status === "loading", position, duration });
-}
-
 function syncPlaybackState() {
-  syncSystemMedia();
   if (!("mediaSession" in navigator)) return;
   const s = usePlayer.getState();
   navigator.mediaSession.playbackState = mediaPlaybackState(s.status, resumeWanted, !!s.queue[s.index]);
@@ -887,7 +893,6 @@ function syncPlaybackState() {
 }
 
 function syncPositionState() {
-  syncSystemMedia();
   const { duration, position } = usePlayer.getState();
   if (!("mediaSession" in navigator) || !navigator.mediaSession.setPositionState) return;
   if (!Number.isFinite(duration) || duration <= 0) return;
@@ -896,17 +901,6 @@ function syncPositionState() {
   } catch {
     /* some browsers reject transient states */
   }
-}
-
-if (systemMedia) {
-  const p = () => usePlayer.getState();
-  systemMedia.onAction((action, position) => {
-    if (action === "play" && p().status !== "playing") p().toggle();
-    else if (action === "pause" && p().status === "playing") p().toggle();
-    else if (action === "next") p().next();
-    else if (action === "previous") p().prev();
-    else if (action === "seek" && position != null) p().seek(position);
-  });
 }
 
 if ("mediaSession" in navigator) {

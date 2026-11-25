@@ -1,3 +1,11 @@
+# Current delivery — 25 November 2026
+
+Use the matched release package and [Hermes handoff](HERMES_DEPLOYMENT_HANDOFF_20261125.md). Keep the existing operator configuration, persistent data, instance secret, wrapper and client browser data. Auth-enabled staging should exercise the backed-up `audio-normalization-off-v1` migration and a second startup. The existing Dockerfile already contains FFmpeg. Its absence on other builds disables analysis and leaves fixed fallback playback available.
+
+The source branch is prepared for Hermes to push to the Azan-Shah fork. A branch push neither runs the tag-only image job nor deploys production. Use a pinned demo image and follow the physical-device checks before promotion. Roll back with the previous server and PWA together. Older browser assets use Standard when the stored level is Off.
+
+---
+
 # Current delivery — prebuilt performance release, 24 November 2026
 
 Extract `Musike_Performance_Release_20261124.zip` into a fresh directory. The complete source already includes the changes. Package contents and first start are documented in `START_HERE.md`. Stage the included `server/dist/server.mjs` and `web/dist/` together or rebuild both from the included source.

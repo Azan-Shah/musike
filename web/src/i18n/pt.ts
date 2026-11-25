@@ -409,6 +409,7 @@ export const pt: Messages = {
     replace: "Substituir",
     replaceNow: "Substituir agora",
     imported: (parts) => `Importado: ${parts.join(", ")}`,
+    skippedRows: (n: number) => `${n} entradas duplicadas, inválidas ou excedentes ignoradas`,
     nothingNew: "Nada novo: sua biblioteca já tinha tudo deste backup",
     newPlaylists: (n) => count(n, "playlist nova", "playlists novas"),
     updatedPlaylists: (n) => count(n, "playlist atualizada", "playlists atualizadas"),

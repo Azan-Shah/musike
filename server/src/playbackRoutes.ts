@@ -27,26 +27,51 @@ export function registerPlayback(app: FastifyInstance, accounts: Accounts | null
   app.get("/api/playback/updates", async (req, reply) => {
     const { user, session } = owner(req); const id = (req.query as { deviceId?: string }).deviceId;
     if (typeof id !== "string") throw fail(400, "Invalid playback device");
-    await sync.read(user, session, id);
-    let dispose = () => {}; let timer: ReturnType<typeof setInterval>;
-    let ended = false; let blocked = false; let pending: SyncView | null = null;
-    const close = () => { if (ended) return; ended = true; clearInterval(timer); dispose(); streams.delete(close); reply.raw.end(); };
-    const send = (view: SyncView) => {
-      if (ended || reply.raw.destroyed) return;
-      if (blocked) { pending = view; return; }
-      blocked = !reply.raw.write(`data: ${JSON.stringify(view)}\n\n`);
-      if (blocked) reply.raw.once("drain", () => { blocked = false; if (pending) { const next = pending; pending = null; send(next); } });
+    let dispose: (() => void) | undefined;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let opened = false;
+    let ended = false;
+    let blocked = false;
+    let pending: SyncView | null = null;
+    const flush = () => {
+      if (ended || !opened || blocked || !pending || reply.raw.destroyed) return;
+      const next = pending;
+      pending = null;
+      blocked = !reply.raw.write(`data: ${JSON.stringify(next)}\n\n`);
+      if (blocked) reply.raw.once("drain", () => { blocked = false; flush(); });
     };
-    reply.hijack(); reply.raw.writeHead(200, { ...reply.getHeaders(), "content-type": "text/event-stream", "cache-control": "no-store", "x-accel-buffering": "no" } as import("node:http").OutgoingHttpHeaders);
-    streams.add(close); reply.raw.once("close", close);
-    dispose = await sync.subscribe(user, session, id, send);
+    const close = () => {
+      if (ended) return;
+      ended = true;
+      clearInterval(timer);
+      pending = null;
+      dispose?.();
+      streams.delete(close);
+      if (opened && !reply.raw.destroyed) reply.raw.end();
+    };
+    const send = (view: SyncView) => { if (!ended) { pending = view; flush(); } };
+
+    reply.raw.once("close", close);
+    try { dispose = await sync.subscribe(user, session, id, send); }
+    catch (error) { reply.raw.removeListener("close", close); throw error; }
+    if (ended || reply.raw.destroyed) { dispose(); return; }
+
+    reply.hijack();
+    opened = true;
+    streams.add(close);
+    reply.raw.writeHead(200, { ...reply.getHeaders(), "content-type": "text/event-stream", "cache-control": "no-store",
+      "x-accel-buffering": "no" } as import("node:http").OutgoingHttpHeaders);
+    flush();
     let checking = false;
     timer = setInterval(() => {
       if (checking) return; checking = true;
       void accounts.authenticate(req.headers.cookie).then(async (auth) => {
         if (!auth || auth.user.id !== user || auth.session !== session) return close();
         send(await sync.read(user, session, id, false));
-        if (!blocked) reply.raw.write(": heartbeat\n\n");
+        if (!ended && !blocked && !reply.raw.write(": heartbeat\n\n")) {
+          blocked = true;
+          reply.raw.once("drain", () => { blocked = false; flush(); });
+        }
       }).catch(close).finally(() => { checking = false; });
     }, 15000); timer.unref();
   });

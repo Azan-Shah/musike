@@ -1,3 +1,26 @@
+# 25 November 2026 release verification
+
+| Check | Result |
+| --- | --- |
+| Full automated suite, Node 22.23.5 and pnpm 10.14.0 | 194 passed. No failed, skipped or cancelled tests. |
+| TypeScript check, production web/PWA build and server bundle | Passed on Node 22.23.5. Worklet emitted as a fingerprinted asset and included in the service worker precache. |
+| Chromium playback smoke | Current production browser assets played three synthetic tracks sequentially, requested the compiled worklet, and reused one media-element source. Auth and media providers used synthetic fixture data. |
+| FFmpeg and Fastify | Existing complete WebM cache entry played while analysis was missing. The later full route returned valid integrated LUFS/true peak metadata and unchanged media bytes. A range returned correct partial status without loudness metadata. |
+| SQLite downgrade probe | The prior worker opened a fixture migrated to the Off schema and read its retained revision and foreign keys. |
+| Data and auth | Fixtures covered large version 1 Favorites, rejected writes, account preferences, SSE admission, authorization, offline playback and storage, and BUG-035 YouTube History recovery. |
+
+Local Social service fixture used 50 approved friends, 20 visible incoming shares and 60 warm sequential samples for each response shape. Timings include local data access and JSON serialization. Production network, browser and provider timing are outside this sample.
+
+| Response | JSON bytes | p50 ms | p95 ms |
+| --- | ---: | ---: | ---: |
+| Full Social | 6,824 | 0.732 | 1.788 |
+| Roster without shares | 3,595 | 0.419 | 0.621 |
+| Presence | 3,443 | 0.317 | 0.500 |
+
+Physical-device audio, locked Android playback, live providers, production Docker, and public-origin performance remain Hermes staging checks. GitHub publication and production deployment are assigned to Hermes.
+
+---
+
 # Validation — prebuilt performance release, 24 November 2026
 
 | Check | Result |

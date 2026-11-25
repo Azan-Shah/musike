@@ -164,7 +164,7 @@ export function SettingsDialog() {
           <h3 className="text-xs font-medium text-fg-3">{t.offline.normalization}</h3>
           <fieldset disabled={savingAudio || !!session.offline}>
             <Segmented<Normalization> label={t.offline.normalization} value={normalization}
-              options={[["quiet", t.offline.quiet], ["standard", t.offline.standard], ["loud", t.offline.loud]]}
+              options={[["quiet", t.offline.quiet], ["standard", t.offline.standard], ["loud", t.offline.loud], ["off", t.offline.normalizationOff]]}
               onChange={value => { setSavingAudio(true); setAudioError(""); void setNormalization(value).catch(() => setAudioError(t.offline.preferenceFailed)).finally(() => setSavingAudio(false)); }} />
           </fieldset>
           <p className="text-xs text-fg-2">{session.offline ? t.offline.normalizationOffline : t.offline.normalizationNote}</p>

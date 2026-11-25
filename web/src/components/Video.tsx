@@ -23,7 +23,7 @@ let seq = 0;
 // Off-screen holder keeps the element rendered (not display:none) so browsers keep it playing.
 const holder = document.createElement("div");
 holder.setAttribute("aria-hidden", "true");
-holder.style.cssText = "position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:0;pointer-events:none;overflow:hidden";
+holder.className = "pointer-events-none fixed bottom-0 left-0 size-0.5 overflow-hidden opacity-0";
 document.body.appendChild(holder);
 holder.appendChild(videoEl);
 

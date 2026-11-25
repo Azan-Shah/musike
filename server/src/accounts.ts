@@ -29,6 +29,7 @@ export class Accounts {
   readonly now: () => number;
   onRevoke?: (user: string, deleting: boolean) => Promise<void>;
   private libraries = new Map<string, ReturnType<typeof createLibrary>>();
+  private libraryCleanup: ReturnType<typeof setInterval>;
   private locks = new Map<string, Promise<unknown>>();
   private constructor(db: Database, secret: string, readonly options: AccountOptions) {
     this.db = db; this.box = secretBox(secret); this.now = options.now ?? Date.now;
@@ -40,27 +41,32 @@ export class Accounts {
       if (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) throw new Error("MUSIKE_PUBLIC_ORIGIN must be an HTTPS origin");
       this.origin = origin.origin;
     }
+    this.libraryCleanup = setInterval(() => {
+      const before = Date.now() - 10 * 60_000;
+      for (const library of this.libraries.values()) library.evictIdle(before);
+    }, 60_000).unref();
   }
   static async open(options: AccountOptions = {}) {
     const db = await Database.open(path.join(config.dataDir, "musike.sqlite"));
+    let accounts: Accounts | undefined;
     try {
-      const accounts = new Accounts(db, options.secret ?? await instanceSecret(config.dataDir), options);
+      accounts = new Accounts(db, options.secret ?? await instanceSecret(config.dataDir), options);
       await accounts.normalizePhones(); await accounts.migrate(); return accounts;
-    } catch (e) { await db.close(); throw e; }
+    } catch (e) { await (accounts ? accounts.close() : db.close()); throw e; }
   }
   async lock<T>(key: string, work: () => Promise<T>): Promise<T> {
     const previous = this.locks.get(key) ?? Promise.resolve();
     const job = previous.catch(() => {}).then(work); this.locks.set(key, job);
     try { return await job; } finally { if (this.locks.get(key) === job) this.locks.delete(key); }
   }
-  async preferences(owner: string): Promise<{ normalization: "quiet" | "standard" | "loud"; revision: number; theme?: "dark" | "light"; language?: "en" | "pt-BR"; appearance?: Record<string, string | boolean> }> {
+  async preferences(owner: string): Promise<{ normalization: "quiet" | "standard" | "loud" | "off"; revision: number; theme?: "dark" | "light"; language?: "en" | "pt-BR"; appearance?: Record<string, string | boolean> }> {
     const row = await this.db.get("SELECT normalization,revision,json FROM account_preferences WHERE user_id=?", [owner]);
     return { ...(row ? JSON.parse(row.json) : {}), normalization: row?.normalization ?? "standard", revision: row?.revision ?? 0 };
   }
   async setPreferences(owner: string, input: unknown) {
     const patch = typeof input === "string" ? { normalization: input } : input as Record<string, unknown>;
     if (!patch || typeof patch !== "object" || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some(k => !["normalization", "theme", "language", "appearance"].includes(k))) throw fail(400, "Invalid preferences");
-    if (patch.normalization !== undefined && !["quiet", "standard", "loud"].includes(patch.normalization as string)) throw fail(400, "Invalid normalization level");
+    if (patch.normalization !== undefined && !["quiet", "standard", "loud", "off"].includes(patch.normalization as string)) throw fail(400, "Invalid normalization level");
     if (patch.theme !== undefined && !["dark", "light"].includes(patch.theme as string) || patch.language !== undefined && !["en", "pt-BR"].includes(patch.language as string)) throw fail(400, "Invalid preferences");
     if (patch.appearance !== undefined) {
       const appearance = patch.appearance as Record<string, unknown>;
@@ -319,5 +325,5 @@ export class Accounts {
     await this.db.run("INSERT INTO invites(hash,phone,expires_at,created_by) VALUES(?,?,?,?)", [this.box.hash(code), bound, this.now() + 7 * 86400_000, actor]);
     await this.audit(actor, "admin.invite.create", null, ip); return { code, expiresAt: this.now() + 7 * 86400_000 };
   }
-  async close() { await this.db.close(); }
+  async close() { clearInterval(this.libraryCleanup); await this.db.close(); }
 }

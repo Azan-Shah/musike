@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, rm, stat, utimes } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { playbackStage } from "./playbackDiagnostics.js";
@@ -7,9 +7,14 @@ import { msg } from "./i18n.js";
 import { config } from "./config.js";
 import { resolveDirectAudio, invalidate, resolveStreams, type StreamFormat } from "./ytdlp.js";
 import { TaskQueue, QueueError } from "./taskQueue.js";
-import { needWindow, releaseWindow, reserveBytes, releaseBytes, consumeBytes, leaseFile, mutateCache } from "./cacheBudget.js";
+import { needWindow, releaseWindow, reserveBytes, releaseBytes, consumeBytes, leaseFile, mutateCache, acquireFileLease } from "./cacheBudget.js";
 
-type CachedAudio = { file: string; mime: string };
+import { measureLoudness, validLoudness, type LoudnessMeasurement } from "./mediaLoudness.js";
+import { tools } from "./tools.js";
+
+type CachedAudio = { file: string; mime: string; loudness?: LoudnessMeasurement };
+type CacheMetadata = { mime: string; size: number; analysis?: LoudnessMeasurement & { rendition: string } };
+const renditionOf = (info: Awaited<ReturnType<typeof stat>>) => `${info.dev}:${info.ino}:${info.birthtimeMs}:${info.size}`;
 export class BudgetFull extends Error {}
 const aborted = () => new DOMException("Aborted", "AbortError");
 const check = (signal: AbortSignal) => { if (signal.aborted) throw aborted(); };
@@ -146,6 +151,10 @@ export interface AudioSourceOptions { candidates?: CandidateProvider; transport?
 
 export class AudioCache {
   private jobs = new TaskQueue(2, 16, 30_000);
+  private analyses = new TaskQueue(1, 8, 15_000);
+  private analyzing = new Map<string, Promise<void>>();
+  private rejectedAnalyses = new Map<string, number>();
+  private analysisStop = new AbortController();
   private windows = new Map<string, { controller: AbortController; signature: string; blocked: boolean; budget: number; revision: number; retryAt: number }>();
   private inflight = new Map<string, { controller: AbortController; consumers: Set<symbol>; work: Promise<CachedAudio> }>();
   constructor(private candidates: CandidateProvider = audioCandidates, private transport: typeof fetch = fetch,
@@ -153,13 +162,50 @@ export class AudioCache {
   async find(id: string): Promise<CachedAudio | null> {
     const file = path.join(config.cacheDir, `${id}.audio.bin`);
     try {
-      const meta = JSON.parse(await readFile(file.replace(/\.bin$/, ".json"), "utf8")) as { mime: string; size: number };
+      const meta = JSON.parse(await readFile(file.replace(/\.bin$/, ".json"), "utf8")) as CacheMetadata;
       const info = await stat(file);
       if (info.size !== meta.size || !["audio/mp4", "audio/webm"].includes(meta.mime)) return null;
-      const now = new Date(); await utimes(file, now, now).catch(() => {});
-      return { file, mime: meta.mime };
+      if (Date.now() - info.mtimeMs >= 30_000) {
+        const now = new Date();
+        await utimes(file, now, now).catch(() => {});
+      }
+      const rendition = renditionOf(info);
+      const loudness = meta.analysis?.rendition === rendition && validLoudness(meta.analysis) ? meta.analysis : undefined;
+      if (!loudness && info.size <= 64 * 1024 * 1024) this.analyze(file, rendition);
+      return { file, mime: meta.mime, loudness };
     } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT" || e instanceof SyntaxError) return null; throw e; }
   }
+  private analyze(file: string, rendition: string) {
+    const key = `${file}:${rendition}`;
+    const signal = this.analysisStop.signal;
+    if (signal.aborted || !tools().ffmpeg || this.analyzing.has(key) || this.analyzing.size >= 9 ||
+      (this.rejectedAnalyses.get(key) ?? 0) > Date.now()) return;
+
+    const metaFile = file.replace(/\.bin$/, ".json");
+    const work = this.analyses.run(async () => {
+      const release = await acquireFileLease(file);
+      const temporary = `${metaFile}.${randomUUID()}.tmp`;
+      try {
+        if (renditionOf(await stat(file)) !== rendition) return;
+        const analysis = await measureLoudness(file, signal);
+        if (!analysis) throw new Error("No integrated loudness result");
+        await mutateCache(async () => {
+          if (signal.aborted || renditionOf(await stat(file)) !== rendition) return;
+          const meta = JSON.parse(await readFile(metaFile, "utf8")) as CacheMetadata;
+          await writeFile(temporary, JSON.stringify({ ...meta, analysis: { ...analysis, rendition } }), { flag: "wx" });
+          await rename(temporary, metaFile);
+        });
+      } finally {
+        release();
+        await rm(temporary, { force: true });
+      }
+    }, signal).catch(() => {
+      if (this.rejectedAnalyses.size >= 128) this.rejectedAnalyses.delete(this.rejectedAnalyses.keys().next().value!);
+      this.rejectedAnalyses.set(key, Date.now() + 10 * 60_000);
+    }).finally(() => this.analyzing.delete(key));
+    this.analyzing.set(key, work);
+  }
+
   async ensure(id: string, signal: AbortSignal): Promise<CachedAudio> {
     check(signal);
     const hit = await this.find(id); check(signal); if (hit) { playbackStage("prepare.hit", { videoId: id, warm: true }); return hit; }
@@ -188,7 +234,7 @@ export class AudioCache {
     const meta = `${file.replace(/\.bin$/, ".json")}.${token}.tmp`;
     let handle: Awaited<ReturnType<typeof open>> | null = null;
     try {
-      if (!response.ok || !response.body) throw new Error("No audio body");
+      if (response.status !== 200 || response.headers.has("content-range") || !response.body) throw new Error("No complete audio body");
       const length = Number(response.headers.get("content-length"));
       if (length > 0 && !await reserveBytes(token, length + 64, id)) throw new BudgetFull();
       await mkdir(config.cacheDir, { recursive: true }); handle = await open(tmp, "wx");
@@ -205,10 +251,13 @@ export class AudioCache {
       const release = leaseFile(file);
       try { await mutateCache(async () => {
         await rename(tmp, file);
-        await (await import("node:fs/promises")).writeFile(meta, JSON.stringify({ mime: format.mime, size }));
+        await writeFile(meta, JSON.stringify({ mime: format.mime, size }));
         await rename(meta, file.replace(/\.bin$/, ".json"));
       }); } finally { release(); }
       playbackStage("prepare.complete", { videoId: id, bytes: size, warm: true });
+      if (tools().ffmpeg && size <= 64 * 1024 * 1024) {
+        void stat(file).then(info => this.analyze(file, renditionOf(info))).catch(() => {});
+      }
       return { file, mime: format.mime };
     } finally {
       selected.cancel(); await response.body?.cancel().catch(() => {}); await handle?.close().catch(() => {});
@@ -242,5 +291,7 @@ export class AudioCache {
   }
   async close() { for (const [client, entry] of this.windows) { entry.controller.abort(); releaseWindow(client); }
     this.windows.clear(); this.jobs.close(); for (const entry of this.inflight.values()) entry.controller.abort();
-    await Promise.allSettled([...this.inflight.values()].map((entry) => entry.work)); }
+    this.analysisStop.abort(); this.analyses.close();
+    await Promise.allSettled([...Array.from(this.inflight.values(), entry => entry.work), ...this.analyzing.values()]);
+  }
 }

@@ -25,7 +25,7 @@ test("normalization preferences default to Standard, sync between sessions, and 
     const second = await login("60120000002", invite);
     assert.equal((await request("/api/auth/me", "GET", undefined, first.cookie)).json().preferences.normalization, "standard");
     assert.equal((await request("/api/account/preferences", "PATCH", { normalization: "quiet" })).statusCode, 401);
-    assert.equal((await request("/api/account/preferences", "PATCH", { normalization: "off" }, first.cookie)).statusCode, 400);
+    assert.equal((await request("/api/account/preferences", "PATCH", { normalization: "invalid" }, first.cookie)).statusCode, 400);
     assert.equal((await request("/api/account/preferences", "PATCH", { normalization: "loud", owner: second.id }, first.cookie)).statusCode, 200);
     assert.equal((await request("/api/account/preferences", "PATCH", { normalization: "loud" }, first.cookie, false)).statusCode, 403);
     const saved = await request("/api/account/preferences", "PATCH", { normalization: "loud" }, first.cookie);
@@ -35,6 +35,7 @@ test("normalization preferences default to Standard, sync between sessions, and 
     assert.deepEqual(presence.json().preferences, saved.json());
     assert.equal((await request("/api/auth/me", "GET", undefined, second.cookie)).json().preferences.normalization, "standard");
     assert.equal((await request("/api/account/preferences", "PATCH", { normalization: "quiet" }, first.cookie)).json().revision, 3);
+    assert.deepEqual((await request("/api/account/preferences", "PATCH", { normalization: "off" }, first.cookie)).json(), { normalization: "off", revision: 4 });
   } finally { await app.close(); config.dataDir = previous; await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -42,15 +43,16 @@ test("normalization migration backs up existing owners, is idempotent, indexed a
   const dir = await mkdtemp(path.join(tmpdir(), "musike-pref-migration-")); const file = path.join(dir, "test.sqlite"); let db = await Database.open(file);
   try {
     await db.run("INSERT INTO users(id,phone,created_at) VALUES(?,?,?)", ["fixture-owner", "+60120000001", 1]);
-    await db.run("DROP TABLE account_preferences"); await db.run("DELETE FROM migrations WHERE key='audio-normalization-v1'");
+    await db.run("DROP TABLE account_preferences"); await db.run("DELETE FROM migrations WHERE key IN ('audio-normalization-v1','account-appearance-v1','audio-normalization-off-v1')");
     await db.close(); db = await Database.open(file);
-    const backups = (await readdir(dir)).filter(name => name.includes("before-audio-normalization")); assert.equal(backups.length, 1);
+    const backups = (await readdir(dir)).filter(name => name.includes("before-audio-normalization-") && !name.includes("before-audio-normalization-off-")); assert.equal(backups.length, 1);
     assert.equal((await stat(path.join(dir, backups[0]!))).mode & 0o777, 0o600);
     assert.ok((await db.all("EXPLAIN QUERY PLAN SELECT normalization FROM account_preferences WHERE user_id=?", ["fixture-owner"])).some(row => /INDEX/.test(row.detail)));
-    await db.run("INSERT INTO account_preferences(user_id,normalization) VALUES(?,?)", ["fixture-owner", "quiet"]);
+    assert.equal((await readdir(dir)).filter(name => name.includes("before-audio-normalization-off-")).length, 1);
+    await db.run("INSERT INTO account_preferences(user_id,normalization) VALUES(?,?)", ["fixture-owner", "off"]);
     await db.close(); db = await Database.open(file);
-    assert.equal((await db.get("SELECT normalization FROM account_preferences WHERE user_id=?", ["fixture-owner"]))?.normalization, "quiet");
-    assert.equal((await readdir(dir)).filter(name => name.includes("before-audio-normalization")).length, 1);
+    assert.equal((await db.get("SELECT normalization FROM account_preferences WHERE user_id=?", ["fixture-owner"]))?.normalization, "off");
+    assert.equal((await readdir(dir)).filter(name => name.includes("before-audio-normalization-") && !name.includes("before-audio-normalization-off-")).length, 1);
     await db.run("DELETE FROM users WHERE id=?", ["fixture-owner"]);
     assert.equal((await db.get("SELECT count(*) AS n FROM account_preferences"))!.n, 0);
   } finally { await db.close(); await rm(dir, { recursive: true, force: true }); }
@@ -90,6 +92,34 @@ test("performance indexes upgrade a populated DB once and serve the maintenance 
       { sql: "DELETE FROM audit WHERE id < (SELECT id FROM audit ORDER BY id DESC LIMIT 1 OFFSET 999)" },
     ]);
     assert.deepEqual(await db.get("SELECT count(*) AS n,min(id) AS oldest FROM audit"), { n: 1000, oldest: 6 });
+  } finally {
+    await db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Off migration retains existing revision and appearance preferences on a populated upgrade", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "musike-off-migration-"));
+  const file = path.join(dir, "test.sqlite");
+  let db = await Database.open(file);
+  try {
+    await db.run("INSERT INTO users(id,phone,created_at) VALUES(?,?,?)", ["fixture-owner", "+60120000001", 1]);
+    await db.run("INSERT INTO account_preferences(user_id,normalization,revision,json) VALUES(?,?,?,?)",
+      ["fixture-owner", "loud", 37, '{"theme":"light"}']);
+    await db.run("DELETE FROM migrations WHERE key='audio-normalization-off-v1'");
+    await db.close();
+    db = await Database.open(file);
+    assert.deepEqual(await db.get("SELECT normalization,revision,json FROM account_preferences WHERE user_id=?", ["fixture-owner"]),
+      { normalization: "loud", revision: 37, json: '{"theme":"light"}' });
+    const backups = () => readdir(dir).then(names => names.filter(name => name.includes("before-audio-normalization-off-")));
+    const first = await backups();
+    assert.equal(first.length, 1);
+    assert.equal((await stat(path.join(dir, first[0]!))).mode & 0o777, 0o600);
+    await db.run("UPDATE account_preferences SET normalization='off' WHERE user_id=?", ["fixture-owner"]);
+    await db.close();
+    db = await Database.open(file);
+    assert.deepEqual(await backups(), first);
+    assert.equal((await db.get("SELECT normalization FROM account_preferences WHERE user_id=?", ["fixture-owner"]))?.normalization, "off");
   } finally {
     await db.close();
     await rm(dir, { recursive: true, force: true });

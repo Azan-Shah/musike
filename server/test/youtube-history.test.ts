@@ -112,13 +112,17 @@ test("a failed start drops the cached client so the next play self-heals", async
   const f = await fixture(); const a = song("ggggggggggg");
   try {
     await f.history.connect(f.user, COOKIE);
+    const validationCalls = f.cookies.length;
+    assert.equal(validationCalls, 1);
     f.setStartReject(true);
     await f.at(0, f.snap(a, 0)); await f.at(5, f.snap(a, 5));
     assert.deepEqual(f.calls.filter((c) => c.kind === "start").map((c) => c.id), ["ggggggggggg"]);
     assert.equal(f.logs.filter((l) => l.event === "youtube_history.start_failed").length, 1);
     f.setStartReject(false);
+    await f.at(40, f.snap(song("iiiiiiiiiii"), 0));
+    assert.equal(f.cookies.length - validationCalls, 1, "cooldown prevents another client attempt");
     await f.at(70, f.snap(song("hhhhhhhhhhh"), 0)); // past the 60s retry backoff
     assert.deepEqual(f.calls.filter((c) => c.kind === "start").map((c) => c.id), ["ggggggggggg", "hhhhhhhhhhh"]);
-    assert.equal(f.cookies.length, 2, "the poisoned client was dropped and rebuilt fresh");
+    assert.equal(f.cookies.length - validationCalls, 2, "the poisoned playback client was dropped and rebuilt fresh");
   } finally { await f.cleanup(); }
 });

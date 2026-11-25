@@ -1,9 +1,10 @@
+import { loudnessOf, rememberLoudness, type LoudnessMeasurement, type Normalization } from "./audioNormalizationCore";
 import type { Library, Playlist, Track } from "./types";
 
 export const BUDGETS = [512, 1024, 2048] as const;
 export const MIB = 1024 * 1024;
 export const MAX_AUDIO = 64 * MIB;
-export interface OfflineSettings { deleted?: string[]; normalization?: "quiet" | "standard" | "loud"; owner: string; enabled: boolean; budget: number; eligible: boolean; name: string; }
+export interface OfflineSettings { deleted?: string[]; normalization?: Normalization; owner: string; enabled: boolean; budget: number; eligible: boolean; name: string; }
 export interface AudioEntry { owner: string; id: string; track: Track; bytes: number; played: number; }
 export interface OfflinePin { owner: string; id: string; playlist: Playlist; pending: Playlist | null; error: string; }
 export interface OfflineSummary { settings: OfflineSettings; entries: AudioEntry[]; pins: OfflinePin[]; bytes: number; }
@@ -55,7 +56,14 @@ export async function offlineSettings(owner: string, patch: Partial<Omit<Offline
   });
 }
 export async function readOfflineAudio(owner: string, id: string): Promise<Blob | null> {
-  return transaction(["blobs"], "readonly", async tx => (await request(tx.objectStore("blobs").get([owner, id])))?.blob ?? null);
+  return transaction(["blobs"], "readonly", async tx => {
+    const record = await request<{ blob: Blob; loudness?: LoudnessMeasurement } | undefined>(tx.objectStore("blobs").get([owner, id]));
+    return record ? rememberLoudness(record.blob, record.loudness) : null;
+  });
+}
+
+export async function offlineAudioEntry(owner: string, id: string) {
+  return transaction(["audio"], "readonly", tx => request<AudioEntry | undefined>(tx.objectStore("audio").get([owner, id])));
 }
 /** Only complete audio is committed. Budget decisions and eviction share the write transaction across tabs. */
 export async function saveOfflineAudio(owner: string, track: Track, blob: Blob, played = 0) {
@@ -77,7 +85,9 @@ export async function saveOfflineAudio(owner: string, track: Track, blob: Blob, 
     }
     if (bytes > settings.budget || count > 2000) throw new Error("budget");
     tx.objectStore("audio").put({ owner, id: track.id, track, bytes: blob.size, played: Math.max(played, previous?.played ?? 0) } satisfies AudioEntry);
-    tx.objectStore("blobs").put({ owner, id: track.id, blob }); return true;
+    const loudness = loudnessOf(blob);
+    tx.objectStore("blobs").put({ owner, id: track.id, blob, ...(loudness ? { loudness } : {}) });
+    return true;
   });
 }
 export async function touchOfflineAudio(owner: string, id: string) {

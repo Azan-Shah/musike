@@ -1,3 +1,13 @@
+# Current release acceptance — 25 November 2026
+
+- [x] Source fixtures cover fixed gain and fallback, safety peaks and Off, stale worklet attachment, volume/mute, SSE admission, storage failure and large Backup restore, preference migration and YouTube History retry.
+- [x] Node 22 checked the production source build and paired PWA/server assets. Exact counts and other results appear in the release package.
+- [ ] Audio on physical Android PWA, desktop, speaker and Bluetooth with equal hardware volume. Compare steady dynamics and track openings, rapid skips, video switching, cold/preloaded/downloaded sources, lock/unlock and external interruption.
+- [ ] Demo against copied deployment data. Verify migration idempotence, account preference sync including Off, offline audio retention, authentication, restore/merge, share permission changes, and signed-in playback takeover.
+- [ ] Record origin and tunnel p50/p95, physical audio observations and image digest. Verify the previous matched build on the migrated copy before promotion.
+
+---
+
 # Current acceptance — prebuilt performance release, 24 November 2026
 
 - [x] Full Node 22 suite with 189 passing tests, including the previously affected process and playback tests.
